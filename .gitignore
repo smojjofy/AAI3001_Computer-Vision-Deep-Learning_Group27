@@ -6,3 +6,13 @@ tmp.md
 /checkpoints/
 /outputs/
 /modules/unreal_adapter/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+#Test Data Control
+/test_data/gaussian_splatting/FO_dataset/drjohnson
+/test_data/gaussian_splatting/FO_dataset/playroom
+/test_data/gaussian_splatting/FO_dataset/truck
