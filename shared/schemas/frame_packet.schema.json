@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://group27.local/schemas/frame_packet.schema.json",
+  "title": "FramePacket metadata envelope",
+  "description": "Versioned, serialisation-safe metadata for one decoded RGB8 frame. In-process code passes the RGB buffer by reference; a transport attaches its variable-length binary plane separately.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "frame_id", "source_id", "capture_timestamp_ns", "timestamp_origin", "image", "quality"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "frame_id": {"type": "integer", "minimum": 0},
+    "source_id": {"type": "string", "minLength": 1},
+    "capture_timestamp_ns": {"type": "integer", "minimum": 0, "description": "Monotonic-domain nanoseconds; never wall-clock ordering time."},
+    "received_timestamp_ns": {"type": "integer", "minimum": 0, "description": "Optional diagnostic monotonic timestamp."},
+    "timestamp_origin": {"type": "string", "enum": ["source_presentation", "decode_monotonic"]},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "stride_bytes", "pixel_format", "payload_encoding", "payload_bytes"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "stride_bytes": {"type": "integer", "minimum": 3},
+        "pixel_format": {"const": "RGB8"},
+        "payload_encoding": {"const": "raw-rgb8"},
+        "payload_bytes": {"type": "integer", "minimum": 3}
+      }
+    },
+    "camera": {"type": "object", "description": "Optional calibrated intrinsics and distortion metadata; define its detailed schema before using it."},
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decode_latency_ns", "frame_age_ns", "frame_age_available", "queue_depth", "dropped_frame_count", "timestamp_status"],
+      "properties": {
+        "decode_latency_ns": {"type": "integer", "minimum": 0},
+        "frame_age_ns": {"type": "integer", "minimum": 0},
+        "frame_age_available": {"type": "boolean", "description": "False when source presentation time is on a clock domain that cannot be compared to this process's monotonic clock."},
+        "queue_depth": {"type": "integer", "minimum": 0},
+        "dropped_frame_count": {"type": "integer", "minimum": 0},
+        "timestamp_status": {"type": "string", "enum": ["ok", "duplicate", "backwards"]},
+        "blur_flag": {"type": "boolean"},
+        "exposure_flag": {"type": "boolean"}
+      }
+    }
+  }
+}

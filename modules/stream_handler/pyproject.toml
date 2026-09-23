@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "live-splat-stream-handler"
+version = "0.1.0"
+description = "Bounded, timestamped RGB capture for the Group 27 live splat MVP"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3",
+  "opencv-python>=4.10,<5"
+]
+
+[project.scripts]
+splat-stream = "stream_handler.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

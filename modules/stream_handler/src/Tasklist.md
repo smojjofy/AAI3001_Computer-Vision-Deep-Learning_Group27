@@ -1,5 +1,5 @@
 # Stream Handler Source Tasklist
 
-- [ ] Implement source adapters.
-- [ ] Normalize all sources into `FramePacket`.
-- [ ] Keep transport concerns out of downstream inference code.
+- [x] Implement recorded-video, camera/OBS, RTSP, and deterministic iterable source adapters.
+- [x] Normalize all source frames into `FramePacket` with RGB8 image buffers and metadata.
+- [x] Keep transport concerns out of downstream inference code.

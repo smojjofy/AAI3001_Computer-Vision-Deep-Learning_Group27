@@ -1,5 +1,5 @@
 # Stream Handler Test Tasklist
 
-- [ ] Test timestamp ordering and frame IDs.
-- [ ] Test dropped, duplicated, late, and corrupt frames.
-- [ ] Test reconnect and recorded-replay behavior.
+- [x] Test timestamp ordering, anomalies, and frame IDs.
+- [x] Test bounded-queue dropping and invalid image rejection.
+- [x] Test deterministic recorded-style replay exhaustion.
