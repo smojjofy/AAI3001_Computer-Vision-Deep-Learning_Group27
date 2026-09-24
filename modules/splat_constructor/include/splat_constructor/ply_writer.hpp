@@ -14,7 +14,8 @@ void write_construction_metadata(
     const CameraIntrinsics& intrinsics,
     const ConstructionConfig& config,
     std::size_t width,
-    std::size_t height
+    std::size_t height,
+    float horizontal_fov_degrees
 );
 
 } // namespace splat

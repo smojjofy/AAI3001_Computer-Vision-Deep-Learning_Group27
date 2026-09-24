@@ -5,6 +5,14 @@ aligned RGB, binary foreground mask, and unitless pseudo inverse-depth images
 into a standard binary 3DGS PLY. The implementation uses the coordinate system
 documented in `shared/coordinate_system/README.md`.
 
+The runtime boundaries are `ConstructionFrame` v1 and `SplatState` v1,
+documented under `shared/schemas/`. The current CLI is a fixture adapter: it
+still reads 8-bit PPM/PGM and exports PLY + JSON, while the future in-memory
+binding will call the implemented float32 entry point directly. That entry
+point supports relative-inverse and metric camera-Z depth, source validity and
+foreground weights, rigid camera-to-world poses, depth-gradient orientation,
+and edge-aware scale reduction.
+
 ## Build and test
 
 The repository includes CMake configuration. On the current Windows workspace,
@@ -36,5 +44,6 @@ python ./scripts/prepare_splat_fixture.py `
 ```
 
 PPM/PGM keeps the native constructor independent of image-decoding libraries.
-The adapter will be replaced by the language-neutral `ConstructionFrame`
-handshake and an in-memory binding after this reference path is validated.
+PLY and metadata JSON are debug/export formats, not the Temporal Cache runtime
+contract. Writes use same-directory temporary files and atomic replacement so
+an interrupted run does not leave a partially written artifact.

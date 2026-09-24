@@ -16,5 +16,10 @@ Y = -(v - cy) * depth / fy
 Z = -depth
 ```
 
+Camera matrices are row-major, right-handed rigid `camera_to_world` transforms. For intrinsics
+derived from horizontal field of view, the constructor assumes square pixels
+(`fy = fx`) and places the principal point at `((W-1)/2, (H-1)/2)`. Consumers
+must preserve this half-pixel convention when reprojecting constructor output.
+
 Gaussian rotations are unit quaternions stored in `wxyz` order. Scale values in
 standard 3DGS PLY files are natural logarithms; opacity values are logits.

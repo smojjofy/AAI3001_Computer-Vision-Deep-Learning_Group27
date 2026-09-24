@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(splat_constructor STATIC
+    src/contracts.cpp
     src/constructor.cpp
     src/image_io.cpp
     src/ply_writer.cpp

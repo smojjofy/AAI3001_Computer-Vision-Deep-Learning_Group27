@@ -18,4 +18,10 @@ namespace splat {
     const ConstructionConfig& config
 );
 
+// Primary v1 entry point. Consumes float32 depth and preserves frame provenance.
+[[nodiscard]] SplatState construct_splat_state(
+    const ConstructionFrame& frame,
+    const ConstructionConfig& config
+);
+
 } // namespace splat

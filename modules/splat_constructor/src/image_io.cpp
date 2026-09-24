@@ -1,5 +1,6 @@
 #include "splat_constructor/image_io.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <limits>
@@ -9,7 +10,7 @@
 namespace splat {
 namespace {
 
-std::string read_token(std::istream& input) {
+std::string read_token(std::istream& input, char* terminating_whitespace = nullptr) {
     std::string token;
     char character{};
     while (input.get(character)) {
@@ -24,6 +25,9 @@ std::string read_token(std::istream& input) {
     }
     while (input.get(character)) {
         if (std::isspace(static_cast<unsigned char>(character))) {
+            if (terminating_whitespace != nullptr) {
+                *terminating_whitespace = character;
+            }
             break;
         }
         token.push_back(character);
@@ -35,6 +39,11 @@ std::string read_token(std::istream& input) {
 }
 
 std::size_t parse_size(const std::string& token, const char* field) {
+    if (token.empty() || !std::ranges::all_of(token, [](unsigned char character) {
+            return std::isdigit(character) != 0;
+        })) {
+        throw std::runtime_error(std::string("invalid portable image ") + field);
+    }
     try {
         const auto value = std::stoull(token);
         if (value == 0 || value > std::numeric_limits<std::size_t>::max()) {
@@ -61,9 +70,17 @@ ImageU8 read_portable_image(const std::filesystem::path& path) {
     }
     const std::size_t width = parse_size(read_token(input), "width");
     const std::size_t height = parse_size(read_token(input), "height");
-    const std::size_t maximum = parse_size(read_token(input), "maximum value");
+    char payload_separator{};
+    const std::size_t maximum = parse_size(
+        read_token(input, &payload_separator), "maximum value"
+    );
     if (maximum != 255) {
         throw std::runtime_error("only 8-bit portable images with max value 255 are supported");
+    }
+    // Treat CRLF as one logical header separator. Do not consume arbitrary
+    // whitespace here because a valid first pixel byte may itself be whitespace.
+    if (payload_separator == '\r' && input.peek() == '\n') {
+        input.get();
     }
     if (width > std::numeric_limits<std::size_t>::max() / height / channels) {
         throw std::runtime_error("portable image dimensions overflow memory size");
@@ -73,6 +90,9 @@ ImageU8 read_portable_image(const std::filesystem::path& path) {
     input.read(reinterpret_cast<char*>(image.pixels.data()), static_cast<std::streamsize>(image.pixels.size()));
     if (input.gcount() != static_cast<std::streamsize>(image.pixels.size())) {
         throw std::runtime_error("portable image payload is truncated");
+    }
+    if (input.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error("portable image contains trailing payload bytes");
     }
     return image;
 }

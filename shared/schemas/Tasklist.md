@@ -2,7 +2,8 @@
 
 - [ ] Define `FramePacket` from Stream Handler to Frame Processor.
 - [ ] Define `ProcessedFrame` from Frame Processor to Inference.
-- [ ] Define `InferencePacket` from Inference to Splat Constructor.
-- [ ] Define `SplatState` from Splat Constructor to Temporal Cache.
+- [x] Define `ConstructionFrame` v1 from Inference to Splat Constructor.
+- [x] Define `SplatState` v1 from Splat Constructor to Temporal Cache.
 - [ ] Define `ReconstructionState` from Temporal Cache to renderers.
-- [ ] Add example payloads and validation rules.
+- [x] Add constructor-boundary validation rules.
+- [ ] Add serialized examples once an inter-process transport is selected.

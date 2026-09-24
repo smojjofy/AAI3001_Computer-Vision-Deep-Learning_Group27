@@ -1,11 +1,17 @@
 # Splat Constructor Tasklist
 
-Input: `InferencePacket` from Inference.
+Input: `ConstructionFrame` v1 from Inference.
 
-Output: `SplatState` containing current Gaussian attributes, RGBA, relative depth, and confidence. The output must match the Temporal Cache input contract exactly.
+Output: `SplatState` v1 containing Gaussian attributes and source provenance.
+PLY + JSON remain export artifacts, not the Temporal Cache boundary.
 
 - [x] Convert RGB, mask, and pseudo-depth into initial camera-space Gaussians.
 - [x] Assign fixed initial opacity; defer confidence weighting to the shared contract.
-- [ ] Preserve frame ID and timestamp.
+- [x] Define preservation of frame ID, timestamp, and source ID in the runtime contract.
 - [x] Export a standard binary 3DGS PLY plus construction metadata.
-- [ ] Add the language-neutral `ConstructionFrame` handshake after the fixed fixture.
+- [x] Add the language-neutral `ConstructionFrame` and `SplatState` contracts.
+- [x] Add deterministic frame-local Gaussian IDs and reconstruction weights.
+- [x] Wire float32 relative-inverse and metric camera-Z depth into construction.
+- [x] Propagate validity/foreground weights and camera-to-world pose.
+- [x] Initialize depth-gradient orientation and reduce scale at mask/depth edges.
+- [ ] Add an in-memory Python binding; the CLI still adapts 8-bit PPM/PGM fixtures.

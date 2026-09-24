@@ -17,6 +17,7 @@ New-Item -ItemType Directory -Force -Path $resolvedBuild | Out-Null
 
 $include = "modules\splat_constructor\include"
 $sources = @(
+    "modules\splat_constructor\src\contracts.cpp",
     "modules\splat_constructor\src\constructor.cpp",
     "modules\splat_constructor\src\image_io.cpp",
     "modules\splat_constructor\src\ply_writer.cpp"

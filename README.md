@@ -40,5 +40,6 @@ The `modules/unreal_adapter/` directory is intentionally ignored by Git for loca
 Temporary Python/PyTorch depth and segmentation baselines provide aligned test
 signals. `modules/splat_constructor/` now contains a C++20 CPU reference
 constructor, native tests, a CLI, and standard 3DGS PLY output. See that
-module's README for the build and fixed-fixture commands. Other modules remain
-planning scaffolds.
+module's README for the build and fixed-fixture commands. Versioned logical
+contracts for constructor input and runtime output live in `shared/schemas/`.
+Other modules remain planning scaffolds.
