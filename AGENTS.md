@@ -1,7 +1,8 @@
 # Repository Guidelines
 
 AAI3001 Computer Vision and Deep Learning (Group 27): a single-camera visual
-reconstruction pipeline. Stack is Python (3.12/3.13) + PyTorch on Windows.
+reconstruction pipeline. Stack is Python (3.12/3.13) + PyTorch for inference
+and C++20 for the Splat Constructor on Windows.
 
 ```text
 RGB stream → segmentation + relative depth + optical flow
@@ -12,8 +13,9 @@ RGB stream → segmentation + relative depth + optical flow
 
 - Pipeline: `stream_handler → frame_processor → inference → splat_constructor
   → temporal_cache → three_viewer`.
-- Only `modules/inference/` has real code today (temporary CNN baselines);
-  every other module is scaffolding plus a `Tasklist.md`.
+- `modules/inference/` contains temporary CNN baselines, and
+  `modules/splat_constructor/` contains the native CPU reference constructor.
+  Other modules remain scaffolding plus a `Tasklist.md`.
 - Run everything as a module from the repo root, e.g.
   `python -m modules.inference.depth.train` — imports rely on the root being on
   `sys.path`.
@@ -23,6 +25,13 @@ RGB stream → segmentation + relative depth + optical flow
 ```bash
 pip install -r modules/inference/requirements.txt   # numpy, Pillow, torch
 python -m pytest                                    # full suite (7 tests)
+```
+
+Native Splat Constructor build and tests:
+
+```powershell
+./scripts/build_splat_constructor.ps1
+./build/splat_constructor/splat_constructor_tests.exe
 ```
 
 Dataset + baseline training (dataset is gitignored; PowerShell on Windows):
@@ -56,6 +65,10 @@ this machine. Set `PYTHONNOUSERSITE=1` before `python -m pytest` if that happens
 - `shared/schemas/` — source of truth for module boundaries (packets still
   in-progress). `config/`, `docs/`, `scripts/`, `applications/`, `tests/` are
   supporting areas.
+
+- `modules/splat_constructor/` contains the C++20 CPU library, CLI, native
+  tests, and standard binary 3DGS PLY writer. CMake configuration is included;
+  use the direct MinGW build script on this machine because CMake is absent.
 
 ## Conventions
 

@@ -1,10 +1,11 @@
 *.excalidraw
-tmp.md
+tmp*
 /.codex
 /data/recordings/
 /data/processed/
 /checkpoints/
 /outputs/
+/build/
 /modules/unreal_adapter/
 
 # Python-generated files

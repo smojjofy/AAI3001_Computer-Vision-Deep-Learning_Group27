@@ -37,4 +37,8 @@ The `modules/unreal_adapter/` directory is intentionally ignored by Git for loca
 
 ## Current Status
 
-The repository contains documentation, interfaces-in-progress, tasklists, and folder scaffolding. Implementation language, runtime framework, model choices, and build commands will be documented here when the development stack is selected.
+Temporary Python/PyTorch depth and segmentation baselines provide aligned test
+signals. `modules/splat_constructor/` now contains a C++20 CPU reference
+constructor, native tests, a CLI, and standard 3DGS PLY output. See that
+module's README for the build and fixed-fixture commands. Other modules remain
+planning scaffolds.

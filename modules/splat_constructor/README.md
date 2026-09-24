@@ -1,0 +1,40 @@
+# Splat Constructor
+
+The first implementation is a dependency-free C++20 CPU constructor. It turns
+aligned RGB, binary foreground mask, and unitless pseudo inverse-depth images
+into a standard binary 3DGS PLY. The implementation uses the coordinate system
+documented in `shared/coordinate_system/README.md`.
+
+## Build and test
+
+The repository includes CMake configuration. On the current Windows workspace,
+where CMake is not installed, use the direct MinGW build script:
+
+```powershell
+./scripts/build_splat_constructor.ps1
+./build/splat_constructor/splat_constructor_tests.exe
+```
+
+## Fixed first fixture
+
+Prepare the aligned `traintest_rgb.jpg` fixture from the temporary inference
+outputs, then construct the PLY:
+
+```powershell
+python ./scripts/prepare_splat_fixture.py `
+  --rgb test_data/gaussian_splatting/FO_dataset/train/traintest_rgb.jpg `
+  --depth outputs/traintest_inverted_050/relative_inverse_depth.png `
+  --mask outputs/traintest_inverted_050/foreground_mask.png `
+  --output outputs/splat_constructor_fixture
+
+./build/splat_constructor/splat_constructor_cli.exe `
+  --rgb outputs/splat_constructor_fixture/rgb.ppm `
+  --depth outputs/splat_constructor_fixture/depth.pgm `
+  --mask outputs/splat_constructor_fixture/mask.pgm `
+  --output outputs/splat_constructor/traintest_initial.ply `
+  --stride 2 --fov 50 --near 1 --far 4
+```
+
+PPM/PGM keeps the native constructor independent of image-decoding libraries.
+The adapter will be replaced by the language-neutral `ConstructionFrame`
+handshake and an in-memory binding after this reference path is validated.
