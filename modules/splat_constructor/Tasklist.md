@@ -14,4 +14,5 @@ PLY + JSON remain export artifacts, not the Temporal Cache boundary.
 - [x] Wire float32 relative-inverse and metric camera-Z depth into construction.
 - [x] Propagate validity/foreground weights and camera-to-world pose.
 - [x] Initialize depth-gradient orientation and reduce scale at mask/depth edges.
-- [ ] Add an in-memory Python binding; the CLI still adapts 8-bit PPM/PGM fixtures.
+- [x] Add a NumPy/ctypes in-memory binding to the C++ `ConstructionFrame` entry point.
+- [ ] Add a PyTorch/DLPack zero-copy path only if profiling shows the copied NumPy boundary is limiting.

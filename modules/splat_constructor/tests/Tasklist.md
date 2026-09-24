@@ -6,4 +6,5 @@
 - [x] Test CRLF image headers, trailing payload rejection, and contract misuse.
 - [x] Test complete, atomically replaceable metadata output.
 - [x] Test float depth semantics, weight propagation, pose, orientation, and edge scaling.
+- [x] Test the Python/NumPy bridge against the compiled native DLL.
 - [ ] Add source-view reprojection validation.

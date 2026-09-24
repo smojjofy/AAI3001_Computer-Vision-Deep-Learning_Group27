@@ -34,4 +34,13 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to build Splat Constructor CLI." }
     -o (Join-Path $resolvedBuild "splat_constructor_tests.exe")
 if ($LASTEXITCODE -ne 0) { throw "Failed to build Splat Constructor tests." }
 
+$bridgeSources = @(
+    "modules\splat_constructor\src\c_api.cpp",
+    "modules\splat_constructor\src\contracts.cpp",
+    "modules\splat_constructor\src\constructor.cpp"
+)
+& $Compiler -std=c++20 -O2 -shared -static -static-libgcc -static-libstdc++ @warnings "-I$include" `
+    @bridgeSources -o (Join-Path $resolvedBuild "splat_constructor_bridge.dll")
+if ($LASTEXITCODE -ne 0) { throw "Failed to build Splat Constructor Python bridge." }
+
 Write-Host "Built Splat Constructor in $resolvedBuild"

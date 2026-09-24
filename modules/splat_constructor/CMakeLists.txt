@@ -19,6 +19,15 @@ else()
     target_compile_options(splat_constructor PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(splat_constructor_bridge SHARED src/c_api.cpp)
+target_link_libraries(splat_constructor_bridge PRIVATE splat_constructor)
+target_include_directories(splat_constructor_bridge PUBLIC include)
+if(MSVC)
+    target_compile_options(splat_constructor_bridge PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(splat_constructor_bridge PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(splat_constructor_cli cli/main.cpp)
 target_link_libraries(splat_constructor_cli PRIVATE splat_constructor)
 

@@ -43,3 +43,12 @@ Segmentation learns a binary foreground mask. Checkpoints contain a schema
 version, task name, model configuration, weights, optimizer state, epoch, step,
 and metrics. Load them with `DepthEstimator.from_checkpoint(...)` or
 `SegmentationEstimator.from_checkpoint(...)`.
+
+## Constructor handoff
+
+`constructor_handoff.py` converts one aligned RGB image, `DepthEstimate`,
+`SegmentationEstimate`, and stream-owned `ConstructionFrameMetadata` into the
+Splat Constructor's `ConstructionFrame` v1. It preserves frame/source IDs,
+timestamp, intrinsics, and camera pose; rejects resolution mismatches; and
+uses depth confidence only as `depth_validity`. It does not reinterpret the
+temporary segmentation-confidence margin as a calibrated quality weight.

@@ -1,4 +1,5 @@
 # Inference Integration Test Tasklist
 
 - [x] Test versioned checkpoint round trips.
-- [ ] Test complete `InferencePacket` assembly after orchestration exists.
+- [x] Test `ConstructionFrame` assembly and alignment validation.
+- [ ] Test complete live inference orchestration after it exists.

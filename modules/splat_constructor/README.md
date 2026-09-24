@@ -13,6 +13,36 @@ point supports relative-inverse and metric camera-Z depth, source validity and
 foreground weights, rigid camera-to-world poses, depth-gradient orientation,
 and edge-aware scale reduction.
 
+## Python bridge
+
+The build script also produces `splat_constructor_bridge.dll`. The Python API
+uses `ctypes` and NumPy, so it adds no package beyond the repository's existing
+NumPy dependency. It copies input arrays into C++ and copies the completed
+`SplatState` back into NumPy; this makes returned arrays independent of native
+handle lifetime.
+
+```python
+import numpy as np
+from modules.splat_constructor import (
+    ConstructionFrame, DepthSemantics, DepthUnits, construct_splat_state,
+)
+
+frame = ConstructionFrame(
+    frame_id="0001", timestamp_ns=1, source_id="0001",
+    rgb=np.zeros((480, 640, 3), dtype=np.uint8),
+    depth=np.ones((480, 640), dtype=np.float32),
+    foreground_mask=np.ones((480, 640), dtype=np.uint8),
+    intrinsics=(600.0, 600.0, 319.5, 239.5),
+    depth_semantics=DepthSemantics.RELATIVE_INVERSE,
+    depth_units=DepthUnits.UNITLESS,
+)
+state = construct_splat_state(frame)
+```
+
+`foreground_mask` must be binary `{0,1}`. Optional `depth_validity` and
+`foreground_weight` are float32 `H x W` arrays in `[0,1]`. The legacy CLI
+continues to accept 8-bit PPM/PGM fixtures.
+
 ## Build and test
 
 The repository includes CMake configuration. On the current Windows workspace,
