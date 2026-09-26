@@ -5,8 +5,7 @@ first result is a **view-conditioned 2.5D coloured splat**: live RGB is
 segmented, assigned relative depth, converted to splats, and temporally smoothed.
 
 It is not a complete, metric 3D scan. One fixed camera cannot observe hidden
-surfaces and monocular depth has no guaranteed real-world scale. See the
-parent-folder `REALITYCHECK.md` for the working limits and honest MVP claim.
+surfaces and monocular depth has no guaranteed real-world scale.
 
 ## Current implementation
 
@@ -25,7 +24,9 @@ OBS Virtual Camera / USB camera / recorded video / RTSP
 
 It provides OpenCV camera, OBS, recorded-video, and RTSP adapters; deterministic
 replay input for tests; RGB8 normalisation; monotonic IDs; timestamp diagnostics;
-a bounded latest-frame-wins queue; stream health; and capped reconnect attempts.
+a bounded latest-frame-wins queue; stream health; timestamp-paced recorded replay;
+and exponential reconnect backoff. Live sources retry indefinitely by default;
+applications may set a finite reconnect-attempt limit when that is safer.
 It does not download models or create splats yet.
 
 The capture contract is [`shared/schemas/frame_packet.schema.json`](shared/schemas/frame_packet.schema.json).
@@ -51,6 +52,12 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .\modules\stream_handler
 ```
 
+If `py` is not configured on this Windows machine, create the environment with:
+
+```powershell
+& 'C:\Users\ziven\AppData\Local\Programs\Python\Python313\python.exe' -m venv .venv
+```
+
 Run tests (no camera, network connection, model download, or private recording
 is needed):
 
@@ -59,12 +66,17 @@ is needed):
 ```
 
 The tests check colour conversion, frame IDs, timestamp anomaly reporting,
-bounded-queue dropping, invalid frames, and replay end-of-stream.
+bounded-queue dropping, invalid frames, replay end-of-stream, and the actual
+OpenCV recorded-video adapter. That integration test generates a three-frame
+primary-colour video at runtime, so no recording is committed to the repository.
 
 ## OBS live setup
 
 OBS is the easiest local demo source: it can compose a webcam, phone camera,
 video, crop, and colour correction, then expose the scene as a normal camera.
+
+The current runnable reports captured frames in PowerShell; OBS Preview remains
+the live visual display until the downstream Three.js viewer is implemented.
 
 1. Create the desired OBS scene.
 2. Set a stable initial output: **1280×720, 30 FPS**.
@@ -91,8 +103,11 @@ diagnose. RTSP or NDI are later options when OBS runs on another machine.
 # Direct webcam
 .\.venv\Scripts\splat-stream.exe --source camera --device 0 --duration 30
 
-# Recorded non-private video
+# Recorded non-private video (replays at the recorded cadence)
 .\.venv\Scripts\splat-stream.exe --source video --path .\path\to\demo.mp4 --duration 30
+
+# Decode recorded video as fast as possible for batch processing
+.\.venv\Scripts\splat-stream.exe --source video --path .\path\to\demo.mp4 --replay-mode fastest --duration 30
 
 # RTSP; do not commit URLs or credentials
 .\.venv\Scripts\splat-stream.exe --source rtsp --url "rtsp://camera-host:554/stream" --duration 30
@@ -120,7 +135,9 @@ metadata envelope plus a separate length-delimited binary image plane.
 The default queue capacity is three frames. If full, it discards the oldest
 unprocessed frame. This is intentional: live freshness matters more than finishing
 a frame that is already stale. Timestamp duplicates/backwards jumps are flagged,
-not silently hidden.
+not silently hidden. A handler with no successful frame for its configurable
+stall timeout reports `stalled`; its final metrics also include capture FPS and
+mean/max decode latency.
 
 ## Next phase: frame processing and inference
 

@@ -7,7 +7,7 @@ import logging
 import time
 
 from .handler import StreamHandler
-from .sources import CameraSource, OBSVirtualCameraSource, RecordedVideoSource, RTSPSource
+from .sources import CameraSource, OBSVirtualCameraSource, RecordedVideoSource, ReplayMode, RTSPSource
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -18,6 +18,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--url", help="RTSP URL for --source rtsp; do not put credentials in shell history.")
     parser.add_argument("--duration", type=float, default=15.0, help="Diagnostic run duration in seconds.")
     parser.add_argument("--queue-capacity", type=int, default=3, choices=range(1, 5))
+    parser.add_argument(
+        "--replay-mode", choices=tuple(ReplayMode), default=ReplayMode.PACED,
+        help="Recorded-video timing: paced (default) or fastest for batch processing.",
+    )
     return parser
 
 
@@ -29,7 +33,7 @@ def _source_from_args(args: argparse.Namespace):
     if args.source == "video":
         if not args.path:
             raise SystemExit("--path is required for --source video")
-        return RecordedVideoSource(args.path)
+        return RecordedVideoSource(args.path, replay_mode=ReplayMode(args.replay_mode))
     if not args.url:
         raise SystemExit("--url is required for --source rtsp")
     return RTSPSource(args.url)
@@ -49,7 +53,7 @@ def main() -> None:
             if packet and now - last_report >= 1.0:
                 logging.info(
                     "frame=%s %sx%s state=%s queue=%s dropped=%s timestamp=%s",
-                    packet.frame_id, packet.width, packet.height, handler.metrics.state,
+                    packet.frame_id, packet.width, packet.height, handler.health(),
                     handler.queue.depth, handler.queue.dropped_total, packet.quality.timestamp_status,
                 )
                 last_report = now

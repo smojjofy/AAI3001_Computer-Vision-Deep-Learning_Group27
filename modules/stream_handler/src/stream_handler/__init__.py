@@ -7,6 +7,7 @@ from .sources import (
     CameraSource,
     IterableFrameSource,
     OBSVirtualCameraSource,
+    ReplayMode,
     RecordedVideoSource,
     RTSPSource,
     SourceExhausted,
@@ -17,6 +18,6 @@ from .sources import (
 __all__ = [
     "CameraSource", "FramePacket", "FrameQuality", "IterableFrameSource",
     "LatestFrameQueue", "OBSVirtualCameraSource", "RecordedVideoSource",
-    "RTSPSource", "SourceExhausted", "SourceFrame", "StreamHandler",
+    "ReplayMode", "RTSPSource", "SourceExhausted", "SourceFrame", "StreamHandler",
     "StreamHealth", "TimestampOrigin"
 ]

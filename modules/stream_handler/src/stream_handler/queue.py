@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 import threading
 import time
-from typing import Deque
+from typing import Callable, Deque
 
 from .contracts import FramePacket
 
@@ -30,7 +30,18 @@ class LatestFrameQueue:
         self._closed = False
         self._condition = threading.Condition()
 
-    def put(self, packet: FramePacket) -> QueuePutResult:
+    def put(
+        self,
+        packet: FramePacket,
+        before_publish: Callable[[QueuePutResult], None] | None = None,
+    ) -> QueuePutResult:
+        """Publish a packet and return its queue accounting.
+
+        ``before_publish`` runs while the queue lock is held, after the result is
+        known but before a consumer can retrieve the packet. It lets a producer
+        attach queue-derived metadata without exposing a partially populated
+        packet to another thread.
+        """
         with self._condition:
             if self._closed:
                 raise RuntimeError("cannot put into a closed queue")
@@ -39,8 +50,12 @@ class LatestFrameQueue:
                 self._items.popleft()
                 self._dropped_total += 1
                 dropped_now = 1
+            # The new packet has not been appended yet, so include it in its
+            # published depth while keeping the stored queue unchanged.
+            result = QueuePutResult(len(self._items) + 1, dropped_now, self._dropped_total)
+            if before_publish is not None:
+                before_publish(result)
             self._items.append(packet)
-            result = QueuePutResult(len(self._items), dropped_now, self._dropped_total)
             self._condition.notify()
             return result
 

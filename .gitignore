@@ -1,4 +1,6 @@
 *.excalidraw
+__pycache__/
+*.py[cod]
 tmp.md
 /.codex
 /data/recordings/
