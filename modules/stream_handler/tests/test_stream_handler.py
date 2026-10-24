@@ -21,9 +21,9 @@ from stream_handler import (
     StreamHandler,
     StreamHealth,
 )
-from stream_handler.sources import RecordedVideoSource, ReplayMode, SourceReadError
+from stream_handler.sources import OBSVirtualCameraSource, RecordedVideoSource, ReplayMode, SourceReadError
 import stream_handler.sources as sources_module
-from stream_handler.cli import _parser
+from stream_handler.cli import _parser, _source_from_args
 
 try:
     import cv2
@@ -146,6 +146,8 @@ class StreamHandlerTests(unittest.TestCase):
         packets = [handler.pump_once() for _ in range(3)]
         self.assertEqual([packet.frame_id for packet in packets], [0, 1, 2])
         self.assertEqual([packet.quality.timestamp_status for packet in packets], ["ok", "duplicate", "backwards"])
+        self.assertEqual(packets[0].metadata()["quality"]["timestamp_status"], "ok")
+        self.assertEqual(packets[0].metadata()["schema_version"], "1.0")
         self.assertEqual(handler.metrics.timestamp_duplicates, 1)
         self.assertEqual(handler.metrics.timestamp_backwards, 1)
 
@@ -210,6 +212,28 @@ class StreamHandlerTests(unittest.TestCase):
         ])
         self.assertEqual(args.source, "video")
         self.assertEqual(args.replay_mode, "fastest")
+
+    def test_cli_camera_capture_request(self) -> None:
+        args = _parser().parse_args([
+            "--source", "obs", "--device", "1", "--width", "1280", "--height", "720", "--fps", "30",
+        ])
+        source = _source_from_args(args)
+        self.assertEqual((source.location, source.width, source.height, source.fps), (1, 1280, 720, 30.0))
+
+    @unittest.skipUnless(cv2 is not None, "OpenCV is not installed")
+    def test_camera_reports_decoded_dimensions_when_capture_request_is_rejected(self) -> None:
+        capture = MagicMock()
+        capture.isOpened.return_value = True
+        capture.read.return_value = (True, np.zeros((480, 640, 3), dtype=np.uint8))
+        with patch.object(cv2, "VideoCapture", return_value=capture):
+            handler = StreamHandler(OBSVirtualCameraSource(1, width=1280, height=720, fps=30))
+            handler.open()
+            packet = handler.pump_once()
+            handler.close()
+        capture.set.assert_any_call(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        capture.set.assert_any_call(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        capture.set.assert_any_call(cv2.CAP_PROP_FPS, 30)
+        self.assertEqual((packet.width, packet.height), (640, 480))
 
     @unittest.skipUnless(cv2 is not None, "OpenCV is not installed")
     def test_opencv_recorded_video_decodes_rgb_and_orders_pts(self) -> None:

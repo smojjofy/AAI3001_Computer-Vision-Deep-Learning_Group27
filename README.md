@@ -88,6 +88,11 @@ the live visual display until the downstream Three.js viewer is implemented.
 .\.venv\Scripts\splat-stream.exe --source obs --device 0 --duration 30
 ```
 
+To request a specific capture format, add `--width 1280 --height 720 --fps 30`.
+The logged resolution always comes from each frame actually received; camera
+drivers can ignore the requested format. Use the device index that selects OBS
+Virtual Camera on your machine.
+
 The diagnostic stores no imagery. It periodically reports frame number,
 resolution, handler state, queue depth, cumulative drops, and timestamp status.
 For a healthy source, frames keep arriving at the expected resolution and the

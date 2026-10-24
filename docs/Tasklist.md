@@ -6,3 +6,4 @@
 - [ ] Record limitations and evaluation results for each MVP milestone.
 - [x] Publish an OBS-to-Stream-Handler operator guide in the parent assignment folder.
 - [x] Record the Stream Handler handoff contract, validation evidence, and open operational checks in the parent assignment folder.
+- [x] Add a presentation Q&A for the slide pipeline, capture resolution, and CLI diagnostics.

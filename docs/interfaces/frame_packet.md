@@ -17,7 +17,7 @@ The in-process Python representation is `stream_handler.FramePacket`.
 | `received_timestamp_ns` | optional monotonic nanoseconds | Diagnostic only; when the handler received/finished decoding the frame. |
 | `rgb` | in-process `numpy.uint8[height, width, 3]` | RGB8, row-major. The JSON envelope carries its shape/byte count, not a fixed-size image field. |
 | `image.stride_bytes` | bytes | The in-memory row stride. Do not assume a fixed resolution. |
-| `quality` | metrics | Decode latency, frame age (only when comparable), queue depth, cumulative handler drops, timestamp status. |
+| `quality` | metrics | Decode latency, frame age (only when comparable), queue depth, cumulative handler drops, and `timestamp_status` for timestamp checks. |
 
 `capture_timestamp_ns` should be non-decreasing per source. A duplicate or
 backwards source timestamp is emitted with `quality.timestamp_status` set to

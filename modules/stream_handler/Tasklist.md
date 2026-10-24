@@ -17,3 +17,6 @@ Output: `FramePacket` with decoded RGB data, frame ID, nanosecond timestamp, sou
 - [ ] Detect and report source-timestamp gaps as well as duplicate/backwards timestamps.
 - [ ] Run a 10-minute live camera and recorded-video soak test for memory stability.
 - [ ] Add optional per-source OpenCV capture settings (resolution/FPS, backend, read timeout, upstream buffer policy) if required by a chosen device.
+- [x] Allow the OBS/camera CLI to request resolution and FPS; continue reporting dimensions from each decoded frame because a device can reject the request.
+- [x] Display the packet's timestamp check as `timestamp_status` in the CLI; keep the log prefix as readable wall-clock time and packet timestamps monotonic.
+- [x] Align FramePacket quality metadata with schema version 1.0 by naming the field `timestamp_status`.

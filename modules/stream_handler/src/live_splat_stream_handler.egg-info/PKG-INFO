@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: live-splat-stream-handler
+Version: 0.1.0
+Summary: Bounded, timestamped RGB capture for the Group 27 live splat MVP
+Requires-Python: >=3.11
+Requires-Dist: numpy<3,>=1.26
+Requires-Dist: opencv-python<5,>=4.10

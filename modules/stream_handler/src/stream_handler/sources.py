@@ -86,11 +86,17 @@ class OpenCVFrameSource:
         source_id: str,
         finite: bool = False,
         replay_mode: ReplayMode = ReplayMode.FASTEST,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
     ) -> None:
         self.location = location
         self.source_id = source_id
         self.finite = finite
         self.replay_mode = replay_mode
+        self.width = width
+        self.height = height
+        self.fps = fps
         self._capture = None
         self._capture_lock = threading.Lock()
         self._closed_event = threading.Event()
@@ -106,6 +112,12 @@ class OpenCVFrameSource:
         if not capture.isOpened():
             capture.release()
             raise SourceReadError(f"could not open source: {self.location}")
+        if self.width is not None:
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        if self.height is not None:
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        if self.fps is not None:
+            capture.set(cv2.CAP_PROP_FPS, self.fps)
         with self._capture_lock:
             self._capture = capture
             self._closed_event.clear()
@@ -163,15 +175,28 @@ class OpenCVFrameSource:
 
 
 class CameraSource(OpenCVFrameSource):
-    def __init__(self, device_index: int = 0, source_id: str | None = None) -> None:
-        super().__init__(device_index, source_id or f"camera:{device_index}")
+    def __init__(
+        self,
+        device_index: int = 0,
+        source_id: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
+    ) -> None:
+        super().__init__(device_index, source_id or f"camera:{device_index}", width=width, height=height, fps=fps)
 
 
 class OBSVirtualCameraSource(CameraSource):
     """OBS Virtual Camera is an ordinary OS camera device; pass its device index."""
 
-    def __init__(self, device_index: int = 0) -> None:
-        super().__init__(device_index, "obs-virtual-camera")
+    def __init__(
+        self,
+        device_index: int = 0,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
+    ) -> None:
+        super().__init__(device_index, "obs-virtual-camera", width=width, height=height, fps=fps)
 
 
 class RecordedVideoSource(OpenCVFrameSource):

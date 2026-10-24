@@ -14,6 +14,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a live-splat frame source without storing imagery.")
     parser.add_argument("--source", choices=("camera", "obs", "video", "rtsp"), default="obs")
     parser.add_argument("--device", type=int, default=0, help="Camera index for --source camera or obs.")
+    parser.add_argument("--width", type=int, help="Requested camera/OBS capture width in pixels.")
+    parser.add_argument("--height", type=int, help="Requested camera/OBS capture height in pixels.")
+    parser.add_argument("--fps", type=float, help="Requested camera/OBS capture frame rate.")
     parser.add_argument("--path", help="Path for --source video.")
     parser.add_argument("--url", help="RTSP URL for --source rtsp; do not put credentials in shell history.")
     parser.add_argument("--duration", type=float, default=15.0, help="Diagnostic run duration in seconds.")
@@ -26,10 +29,18 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _source_from_args(args: argparse.Namespace):
+    if (args.width is None) != (args.height is None):
+        raise SystemExit("--width and --height must be supplied together")
+    if args.width is not None and (args.width < 1 or args.height < 1):
+        raise SystemExit("--width and --height must be positive")
+    if args.fps is not None and args.fps <= 0:
+        raise SystemExit("--fps must be positive")
+    if args.source not in ("obs", "camera") and any(value is not None for value in (args.width, args.height, args.fps)):
+        raise SystemExit("--width, --height, and --fps apply only to camera or obs sources")
     if args.source == "obs":
-        return OBSVirtualCameraSource(args.device)
+        return OBSVirtualCameraSource(args.device, width=args.width, height=args.height, fps=args.fps)
     if args.source == "camera":
-        return CameraSource(args.device)
+        return CameraSource(args.device, width=args.width, height=args.height, fps=args.fps)
     if args.source == "video":
         if not args.path:
             raise SystemExit("--path is required for --source video")
@@ -52,7 +63,7 @@ def main() -> None:
             now = time.monotonic()
             if packet and now - last_report >= 1.0:
                 logging.info(
-                    "frame=%s %sx%s state=%s queue=%s dropped=%s timestamp=%s",
+                    "frame=%s %sx%s state=%s queue=%s dropped=%s timestamp_status=%s",
                     packet.frame_id, packet.width, packet.height, handler.health(),
                     handler.queue.depth, handler.queue.dropped_total, packet.quality.timestamp_status,
                 )

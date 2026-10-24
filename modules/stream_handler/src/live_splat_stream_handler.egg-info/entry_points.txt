@@ -1,0 +1,2 @@
+[console_scripts]
+splat-stream = stream_handler.cli:main
