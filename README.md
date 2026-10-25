@@ -139,32 +139,50 @@ not silently hidden. A handler with no successful frame for its configurable
 stall timeout reports `stalled`; its final metrics also include capture FPS and
 mean/max decode latency.
 
-## Next phase: frame processing and inference
+## Planned pipeline: flow-guided reuse and selective estimation
 
-The Frame Processor will accept a `FramePacket`, validate RGB, resize/normalise,
-optionally undistort it, and emit a `ProcessedFrame` with the **same** frame ID,
-source ID, and timestamp.
+Only the Stream Handler shown above is implemented. The remaining stages and
+feedback path below are the intended design, not a working pipeline yet. The
+Frame Processor will validate RGB, resize/normalise, optionally undistort, and
+emit a `ProcessedFrame` with the **same** frame ID, source ID, and timestamp.
 
 ```text
-FramePacket
-  → Frame Processor → ProcessedFrame
-  → parallel workers
-       ├─ segmentation → foreground alpha mask
-       ├─ MediaPipe Pose → body landmarks
-       ├─ Depth Anything V2 Small → relative depth
-       └─ optical flow → current/prior-frame motion
-  → asynchronous join by original frame ID + timestamp
-  → InferencePacket → Splat Constructor
+Stream Handler → FramePacket → Frame Processor → ProcessedFrame
+                                             ↓
+                              small selection buffer → optical flow
+                                                         ↓
+                                      reranker / estimation scheduler
+                                       ├─ reuse → Temporal Cache
+                                       └─ refresh → depth + foreground segmentation
+                                                     + optional human pose/motion
+                                                   → Splat Constructor
+                                                   → Temporal Cache
+                                                          ↓
+                                              Splat Adjustor → Three.js viewer
+
+Temporal Cache ── state confidence / refresh request ──→ reranker
 ```
 
-Workers finish at different times. Their outputs must be joined by source frame
-identity, never callback arrival order. Start with model stubs to prove that
-joining works, then add segmentation, MediaPipe, and Depth Anything one by one.
-The viewer can render at 30 FPS while depth updates at a sustainable lower rate.
+Optical flow compares processed camera frames, not frames against splats. The
+reranker uses flow, frame quality, and freshness to decide whether another
+estimator result would be useful. The Temporal Cache owns the decision about
+whether its current splat state can still be adjusted confidently; it may ask
+the reranker for a refresh. Low measured motion alone does not require a
+refresh. An optional, configurable maximum refresh interval is a fallback.
+The cache supplies reconstruction state to the viewer on reuse and refresh
+paths, so the viewer need not wait for depth on every captured frame.
 
-MediaPipe supplies approximate single-camera pose landmarks, not full motion
-capture. Depth Anything V2 Small supplies **relative**, not LiDAR-grade metric,
-depth. A separate segmentation model is necessary for foreground alpha.
+Initial flow selection will benchmark OpenCV DIS at reduced resolution. RAFT
+Small and SEA-RAFT are candidate upgrades if selection or splat adjustment
+needs more accurate flow. Depth Anything 3 Small/Base are candidates for depth;
+the depth model and any human-pose estimator have not been selected or integrated.
+Human body pose and camera pose are different outputs. Foreground segmentation
+remains necessary for alpha. Estimator workers may finish at different times;
+their results must be joined by original frame ID and timestamp, never callback
+arrival order. Begin integration with model stubs and recorded fixtures.
+
+The detailed build order and proposed controls are in
+[CVDL_optical_flow_plan.md](../CVDL_optical_flow_plan.md).
 
 ## Hardware target and troubleshooting
 
@@ -187,9 +205,9 @@ hardware, reduce depth frequency rather than letting latency accumulate.
 shared/schemas/            source-of-truth packet definitions
 modules/stream_handler/    implemented capture slice
 modules/frame_processor/   next: resize, normalise, optional undistort
-modules/inference/         next: segmentation, depth, pose, flow
+modules/inference/         next: flow, segmentation, depth; optional human pose
 modules/splat_constructor/ later: depth/mask to Gaussian states
-modules/temporal_cache/    later: temporal smoothing/interpolation
+modules/temporal_cache/    later: state reuse, refresh feedback, smoothing
 modules/three_viewer/      later: Three.js rendering
 docs/interfaces/           packet boundary documentation
 ```

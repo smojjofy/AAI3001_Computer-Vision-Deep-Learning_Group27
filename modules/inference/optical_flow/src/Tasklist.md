@@ -1,5 +1,8 @@
 # Optical Flow Source Tasklist
 
-- [ ] Implement previous-frame lookup.
-- [ ] Return flow, validity, and timestamp metadata.
-- [ ] Keep flow convention consistent with temporal cache warping.
+- [x] Implement bounded previous-frame lookup in `OpticalFlowTracker`.
+- [x] Return flow, validity, and timestamp metadata.
+- [x] Define previous-to-current flow for temporal cache warping.
+- [x] Select DIS or RAFT Small through one estimator factory and result contract.
+- [x] Consume Stream Handler `FramePacket`s directly from its latest-frame-wins
+      queue without assuming consecutive frame IDs.

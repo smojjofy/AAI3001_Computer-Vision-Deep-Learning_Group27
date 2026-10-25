@@ -8,17 +8,16 @@ This document describes the reconciled MVP and its extension path. The base syst
 flowchart TD
     CAM[Static webcam or IP camera]
     STREAM[Stream Handler<br/>decode, timestamp, reconnect]
-    PRE[Frame Processor<br/>resize, normalize, quality checks]
-    BUFFER[Timestamped ring buffer<br/>bounded history and frame-drop handling]
-
-    RGB[RGB frame]
+    PACKET[RGB8 FramePacket<br/>identity, timestamp, quality]
+    FLOW[Optical flow<br/>FramePacket pair to FlowResult]
+    SELECT[Reranker<br/>bounded selection window]
+    PRE[Frame Processor<br/>prepare selected refresh frame]
     SEG[Foreground segmentation<br/>mask + confidence]
     DEPTH[Monocular depth<br/>relative depth + confidence]
-    FLOW[Optical flow<br/>temporal correspondence]
+    MOTION[Optional human motion or pose]
     FRAME[ConstructionFrame<br/>RGB + mask + depth + flow<br/>optional camera/pose/rig metadata]
 
-    SELECT[Keyframe selector<br/>motion, depth change, heartbeat]
-    REUSE[Reuse and deform current state<br/>for non-keyframes]
+    REUSE[Reuse current state<br/>with reliable flow]
     INIT[Depth-guided splat initializer<br/>keyframes only]
     FUSE[Merge, deduplicate, and prune]
     BIND[Optional skeletal binding<br/>when pose/rig data is available]
@@ -33,21 +32,23 @@ flowchart TD
     VIEW[Three.js static compositor<br/>Gaussian renderer, alpha compositing,<br/>GUI and diagnostics]
     FINAL[Final Three.js view]
 
-    CAM --> STREAM --> PRE --> BUFFER
-    BUFFER --> RGB
-    RGB --> SEG
-    RGB --> DEPTH
-    RGB --> FLOW
-    RGB --> FRAME
+    CAM --> STREAM --> PACKET --> FLOW --> SELECT
+    PACKET --> SELECT
+    SELECT -->|refresh| PRE
+    PRE --> SEG
+    PRE --> DEPTH
+    PRE --> MOTION
+    PRE --> FRAME
     SEG --> FRAME
     DEPTH --> FRAME
+    MOTION --> FRAME
     FLOW --> FRAME
 
-    FRAME --> SELECT
-    SELECT -->|No| REUSE
-    SELECT -->|Yes| INIT --> FUSE
+    SELECT -->|reuse| REUSE
+    FRAME --> INIT --> FUSE
     FUSE --> BIND --> CACHE
     REUSE --> CACHE
+    CACHE -. refresh request and confidence .-> SELECT
     CACHE --> RENDER --> OUTPUT --> VIEW
 
     CACHE --> REPLAY --> OPT --> CACHE
@@ -59,8 +60,8 @@ flowchart TD
     classDef render fill:#f3e8ff,stroke:#9333ea,color:#111827;
     classDef optional fill:#f3f4f6,stroke:#6b7280,color:#111827;
 
-    class CAM,STREAM,PRE,BUFFER input;
-    class RGB,SEG,DEPTH,FLOW,FRAME inference;
+    class CAM,STREAM,PACKET,PRE input;
+    class SEG,DEPTH,MOTION,FLOW,FRAME inference;
     class SELECT,REUSE,INIT,FUSE,BIND,CACHE construct;
     class RENDER,OUTPUT,ENV,VIEW,FINAL render;
     class REPLAY,OPT optional;
@@ -76,7 +77,7 @@ The first implementation should include:
 - Foreground segmentation.
 - Monocular relative-depth estimation.
 - Optical flow for temporal correspondence.
-- Keyframe selection with a configurable heartbeat.
+- Reranking with a bounded selection window and an optional periodic refresh fallback.
 - Depth-guided Gaussian initialization for keyframes.
 - Merge, deduplication, confidence tracking, and pruning.
 - Temporal reuse for non-keyframes.

@@ -1,9 +1,14 @@
 # Inference Tasklist
 
-Input: `ProcessedFrame` from Frame Processor.
+Input: optical flow receives RGB8 `FramePacket` pairs directly from Stream
+Handler. Depth and segmentation receive selected frames through Frame Processor
+when requested by the reranker.
 
-Output: `InferencePacket` containing RGB, foreground mask, mask confidence, relative depth, depth confidence, optical flow, and valid-flow mask. This is the exact input contract for Splat Constructor.
+Output: separately timestamped flow results on processed frame pairs, and
+segmentation/depth results only when requested by the scheduler. The estimator
+results are joined by source frame identity before Splat Construction; the
+combined packet contract still needs definition.
 
-- [ ] Orchestrate segmentation, depth, and optical-flow models.
+- [ ] Orchestrate selective segmentation/depth and per-pair optical flow.
 - [ ] Use pretrained models first.
 - [ ] Preserve timestamps and dimensions across every output.
