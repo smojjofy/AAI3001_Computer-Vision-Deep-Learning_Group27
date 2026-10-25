@@ -40,6 +40,8 @@ def main() -> None:
     parser.add_argument("--duration-s", type=float, default=15.0)
     parser.add_argument("--max-frames", type=int)
     parser.add_argument("--queue-capacity", type=int, default=3)
+    parser.add_argument("--summary-only", action="store_true",
+                        help="Suppress per-frame JSON and reduce diagnostic output overhead")
     parser.add_argument("--config", type=Path, default=ROOT / "config/optical_flow.example.json")
     args = parser.parse_args()
     if args.duration_s <= 0 or args.queue_capacity < 1 or (args.max_frames is not None and args.max_frames < 1):
@@ -65,8 +67,11 @@ def main() -> None:
     handler = StreamHandler(source, queue_capacity=args.queue_capacity)
     consumer = StreamFlowConsumer(handler, OpticalFlowTracker(create_estimator(config)))
     durations_ms: list[float] = []
+    valid_fractions: list[float] = []
+    statuses: dict[str, int] = {}
     seen = 0
     deadline = time.monotonic() + args.duration_s
+    started = time.monotonic()
     handler.start()
     try:
         while time.monotonic() < deadline and (args.max_frames is None or seen < args.max_frames):
@@ -77,34 +82,45 @@ def main() -> None:
                 continue
             packet, result = observation.packet, observation.flow
             seen += 1
+            statuses[result.status] = statuses.get(result.status, 0) + 1
             duration_ms = observation.processing_time_ns / 1_000_000
             if result.status == "ok":
                 durations_ms.append(duration_ms)
-            valid_vectors = result.flow[result.valid_mask]
-            median_motion = np.median(valid_vectors, axis=0).tolist() if len(valid_vectors) else None
-            print(json.dumps({
-                "source_id": packet.source_id,
-                "frame_id": packet.frame_id,
-                "previous_frame_id": result.previous_frame_id,
-                "capture_timestamp_ns": packet.capture_timestamp_ns,
-                "elapsed_ns": result.elapsed_ns,
-                "status": result.status,
-                "flow_backend": result.backend,
-                "flow_ms": round(duration_ms, 3),
-                "valid_fraction": round(result.valid_fraction, 3),
-                "median_motion_px": median_motion,
-                "queue_drops_total": packet.quality.dropped_frame_count,
-            }), flush=True)
+                valid_fractions.append(result.valid_fraction)
+            if not args.summary_only:
+                valid_vectors = result.flow[result.valid_mask]
+                median_motion = np.median(valid_vectors, axis=0).tolist() if len(valid_vectors) else None
+                print(json.dumps({
+                    "source_id": packet.source_id,
+                    "frame_id": packet.frame_id,
+                    "previous_frame_id": result.previous_frame_id,
+                    "capture_timestamp_ns": packet.capture_timestamp_ns,
+                    "elapsed_ns": result.elapsed_ns,
+                    "status": result.status,
+                    "flow_backend": result.backend,
+                    "flow_ms": round(duration_ms, 3),
+                    "valid_fraction": round(result.valid_fraction, 3),
+                    "median_motion_px": median_motion,
+                    "queue_drops_total": packet.quality.dropped_frame_count,
+                }), flush=True)
     except KeyboardInterrupt:
         pass
     finally:
         handler.stop()
+    elapsed_s = time.monotonic() - started
+    ordered_ms = sorted(durations_ms)
     print(json.dumps({
         "summary": {
+            "flow_model": config.flow_model,
+            "elapsed_s": round(elapsed_s, 3),
             "frames_consumed": seen,
             "frames_emitted": handler.metrics.emitted_frames,
             "queue_drops_total": handler.queue.dropped_total,
+            "queue_drop_fraction": round(handler.queue.dropped_total / handler.metrics.emitted_frames, 3) if handler.metrics.emitted_frames else None,
+            "statuses": statuses,
             "flow_ms_p50": round(statistics.median(durations_ms), 3) if durations_ms else None,
+            "flow_ms_p95": round(ordered_ms[min(len(ordered_ms) - 1, int(0.95 * len(ordered_ms)))], 3) if ordered_ms else None,
+            "valid_fraction_mean": round(statistics.mean(valid_fractions), 3) if valid_fractions else None,
         }
     }), flush=True)
 

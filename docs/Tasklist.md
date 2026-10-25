@@ -6,3 +6,5 @@
 - [ ] Record limitations and evaluation results for each MVP milestone.
 - [x] Publish an OBS-to-Stream-Handler operator guide in the parent assignment folder.
 - [x] Record the Stream Handler handoff contract, validation evidence, and open operational checks in the parent assignment folder.
+- [x] Document physical camera, OBS, recorded replay, flow previews, and
+      comparable DIS/RAFT Small benchmark steps.

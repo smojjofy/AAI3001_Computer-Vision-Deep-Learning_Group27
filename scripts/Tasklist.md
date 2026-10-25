@@ -6,3 +6,5 @@
 - [ ] Keep scripts cross-platform where practical.
 - [x] Provide a live and recorded Stream Handler to optical-flow diagnostic
       command that reports identities, queue drops, and flow timing.
+- [x] Add fair benchmark warmup, summary-only live replay, and a saved flow
+      preview for inspecting direction and valid regions.

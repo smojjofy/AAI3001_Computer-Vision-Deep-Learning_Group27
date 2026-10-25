@@ -1,4 +1,4 @@
-"""Measure DIS on recorded footage through the existing Stream Handler.
+"""Benchmark DIS or RAFT Small on the same recorded Stream Handler frames.
 
 Run from the repository root with the environment that has OpenCV installed:
 python scripts/benchmark_optical_flow.py path/to/recording.mp4 --max-frames 300
@@ -27,9 +27,13 @@ def main() -> None:
     parser.add_argument("video", type=Path)
     parser.add_argument("--config", type=Path, default=ROOT / "config/optical_flow.example.json")
     parser.add_argument("--max-frames", type=int, default=300)
+    parser.add_argument("--warmup-pairs", type=int, default=5,
+                        help="Exclude this many initial valid pairs from timing statistics")
     args = parser.parse_args()
     if args.max_frames < 2:
         parser.error("--max-frames must be at least 2")
+    if args.warmup_pairs < 0:
+        parser.error("--warmup-pairs must be non-negative")
     if not args.video.is_file():
         parser.error(f"video does not exist: {args.video}")
 
@@ -43,6 +47,7 @@ def main() -> None:
     latencies_ms: list[float] = []
     valid_fractions: list[float] = []
     statuses: dict[str, int] = {}
+    ok_pairs = 0
     handler.open()
     try:
         for _ in range(args.max_frames):
@@ -57,14 +62,18 @@ def main() -> None:
             duration_ms = (time.perf_counter_ns() - start) / 1_000_000
             statuses[result.status] = statuses.get(result.status, 0) + 1
             if result.status == "ok":
-                latencies_ms.append(duration_ms)
-                valid_fractions.append(result.valid_fraction)
+                ok_pairs += 1
+                if ok_pairs > args.warmup_pairs:
+                    latencies_ms.append(duration_ms)
+                    valid_fractions.append(result.valid_fraction)
     finally:
         handler.close()
 
     report = {
         "video": str(args.video),
         "frames": sum(statuses.values()),
+        "warmup_pairs_skipped": min(ok_pairs, args.warmup_pairs),
+        "measured_pairs": len(latencies_ms),
         "statuses": statuses,
         "flow_model": config.flow_model,
         "dis_preset": config.dis_preset if config.flow_model == "opencv_dis" else None,
