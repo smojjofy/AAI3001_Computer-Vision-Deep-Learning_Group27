@@ -7,7 +7,7 @@ from mediapipe.tasks.python.vision import pose_landmarker
 from mediapipe.tasks.python.vision.core import image as image_module
 from mediapipe.tasks.python.vision.core import vision_task_running_mode
 
-from .contracts import PoseEstimation, PoseLandmark
+from .contracts import (PoseEstimation, PoseFrameResult,PoseLandmark,)
 
 
 class PoseEstimator:
@@ -175,6 +175,46 @@ class VideoPoseEstimator:
         return PoseEstimation(
             detected=True,
             landmarks=landmarks,
+        )
+
+    def estimate_frame(
+        self,
+        rgb_frame: np.ndarray,
+        frame_id: int,
+        source_id: str,
+        capture_timestamp_ns: int,
+    ) -> PoseFrameResult:
+        """Estimate pose while preserving source-frame identity."""
+
+        if frame_id < 0:
+            raise ValueError(
+                "frame_id must be non-negative"
+            )
+
+        if not source_id:
+            raise ValueError(
+                "source_id must not be empty"
+            )
+
+        if capture_timestamp_ns < 0:
+            raise ValueError(
+                "capture_timestamp_ns must be non-negative"
+            )
+
+        timestamp_ms = (
+            capture_timestamp_ns // 1_000_000
+        )
+
+        pose = self.estimate(
+            rgb_frame,
+            timestamp_ms,
+        )
+
+        return PoseFrameResult(
+            frame_id=frame_id,
+            source_id=source_id,
+            capture_timestamp_ns=capture_timestamp_ns,
+            pose=pose,
         )
 
     def close(self) -> None:

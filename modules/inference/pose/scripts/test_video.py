@@ -99,7 +99,7 @@ def main() -> None:
 
     frame_count = 0
     pose_detected_count = 0
-
+    identity_mismatch_count = 0
     total_inference_ms = 0.0
 
 
@@ -126,18 +126,30 @@ def main() -> None:
             #rather than wall-clock execution time.
             #*/
 
-            timestamp_ms = round(
-                frame_count
-                * 1000.0
+            frame_id = frame_count
+
+            source_id = "test-video"
+
+            capture_timestamp_ns = round(
+                frame_id
+                * 1_000_000_000
                 / source_fps
             )
 
             start_time = perf_counter()
 
-            result = estimator.estimate(
-                frame_rgb,
-                timestamp_ms,
+            result = estimator.estimate_frame(
+                rgb_frame=frame_rgb,
+                frame_id=frame_id,
+                source_id=source_id,
+                capture_timestamp_ns=capture_timestamp_ns,
             )
+            if (
+                result.frame_id != frame_id
+                or result.source_id != source_id
+                or result.capture_timestamp_ns != capture_timestamp_ns
+            ):
+                identity_mismatch_count += 1
 
             inference_ms = (
                 perf_counter() - start_time
@@ -146,11 +158,11 @@ def main() -> None:
             total_inference_ms += inference_ms
             frame_count += 1
 
-            if result.detected:
+            if result.pose.detected:
                 pose_detected_count += 1
                 draw_pose(
                     frame_bgr,
-                    result.landmarks,
+                    result.pose.landmarks,
                 )
 
             pose_inference_fps = (
@@ -161,7 +173,7 @@ def main() -> None:
 
             status = (
                 "DETECTED"
-                if result.detected
+                if result.pose.detected
                 else "NO POSE"
             )
 
@@ -263,6 +275,11 @@ def main() -> None:
         print(
             f"Detection rate: "
             f"{detection_rate:.2f}%"
+        )
+
+        print(
+            f"Identity mismatches: "
+            f"{identity_mismatch_count}"
         )
 
         print(

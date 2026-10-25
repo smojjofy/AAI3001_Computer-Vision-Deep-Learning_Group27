@@ -14,4 +14,4 @@ Prototype milestones:
 - [x] Draw pose landmarks and connections for visual validation.
 - [x] Process recorded video frame-by-frame.
 - [x] Measure pose inference latency and FPS.
-- [ ] Preserve frame identity/timestamp when integrated with the pipeline.
+- [x] Preserve frame identity/timestamp when integrated with the pipeline.
