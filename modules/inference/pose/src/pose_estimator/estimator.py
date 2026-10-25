@@ -1,0 +1,187 @@
+from pathlib import Path
+
+import numpy as np
+
+from mediapipe.tasks.python.core import base_options
+from mediapipe.tasks.python.vision import pose_landmarker
+from mediapipe.tasks.python.vision.core import image as image_module
+from mediapipe.tasks.python.vision.core import vision_task_running_mode
+
+from .contracts import PoseEstimation, PoseLandmark
+
+
+class PoseEstimator:
+    """MediaPipe pose estimator for one RGB video frame."""
+
+    def __init__(self, model_path: str | Path) -> None:
+        model_path = Path(model_path)
+
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                f"Pose Landmarker model not found: {model_path}"
+            )
+
+        options = pose_landmarker.PoseLandmarkerOptions(
+            base_options=base_options.BaseOptions(
+                model_asset_path=str(model_path)
+            ),
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            output_segmentation_masks=False,
+        )
+
+        self._landmarker = (
+            pose_landmarker.PoseLandmarker.create_from_options(options)
+        )
+
+    def estimate(self, rgb_frame: np.ndarray) -> PoseEstimation:
+        """Estimate a human pose from one RGB uint8 frame."""
+
+        if rgb_frame.ndim != 3 or rgb_frame.shape[2] != 3:
+            raise ValueError(
+                "rgb_frame must have shape [height, width, 3]"
+            )
+
+        if rgb_frame.dtype != np.uint8:
+            raise ValueError(
+                "rgb_frame must use dtype uint8"
+            )
+
+        rgb_frame = np.ascontiguousarray(rgb_frame)
+
+        mp_image = image_module.Image(
+            image_format=image_module.ImageFormat.SRGB,
+            data=rgb_frame,
+        )
+
+        result = self._landmarker.detect(mp_image)
+
+        if not result.pose_landmarks:
+            return PoseEstimation(
+                detected=False,
+                landmarks=(),
+            )
+
+        pose = result.pose_landmarks[0]
+
+        landmarks = tuple(
+            PoseLandmark(
+                x=landmark.x,
+                y=landmark.y,
+                z=landmark.z,
+                visibility=landmark.visibility,
+                presence=landmark.presence,
+            )
+            for landmark in pose
+        )
+
+        return PoseEstimation(
+            detected=True,
+            landmarks=landmarks,
+        )
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+    def __enter__(self) -> "PoseEstimator":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+
+class VideoPoseEstimator:
+    """MediaPipe pose estimator for sequential RGB video frames."""
+
+    def __init__(self, model_path: str | Path) -> None:
+        model_path = Path(model_path)
+
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                f"Pose Landmarker model not found: {model_path}"
+            )
+
+        options = pose_landmarker.PoseLandmarkerOptions(
+            base_options=base_options.BaseOptions(
+                model_asset_path=str(model_path)
+            ),
+            running_mode=vision_task_running_mode.VisionTaskRunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            output_segmentation_masks=False,
+        )
+
+        self._landmarker = (
+            pose_landmarker.PoseLandmarker.create_from_options(options)
+        )
+
+    def estimate(
+        self,
+        rgb_frame: np.ndarray,
+        timestamp_ms: int,
+    ) -> PoseEstimation:
+        """Estimate pose for one sequential video frame."""
+
+        if rgb_frame.ndim != 3 or rgb_frame.shape[2] != 3:
+            raise ValueError(
+                "rgb_frame must have shape [height, width, 3]"
+            )
+
+        if rgb_frame.dtype != np.uint8:
+            raise ValueError(
+                "rgb_frame must use dtype uint8"
+            )
+
+        if timestamp_ms < 0:
+            raise ValueError(
+                "timestamp_ms must be non-negative"
+            )
+
+        rgb_frame = np.ascontiguousarray(rgb_frame)
+
+        mp_image = image_module.Image(
+            image_format=image_module.ImageFormat.SRGB,
+            data=rgb_frame,
+        )
+
+        result = self._landmarker.detect_for_video(
+            mp_image,
+            timestamp_ms,
+        )
+
+        if not result.pose_landmarks:
+            return PoseEstimation(
+                detected=False,
+                landmarks=(),
+            )
+
+        pose = result.pose_landmarks[0]
+
+        landmarks = tuple(
+            PoseLandmark(
+                x=landmark.x,
+                y=landmark.y,
+                z=landmark.z,
+                visibility=landmark.visibility,
+                presence=landmark.presence,
+            )
+            for landmark in pose
+        )
+
+        return PoseEstimation(
+            detected=True,
+            landmarks=landmarks,
+        )
+
+    def close(self) -> None:
+        self._landmarker.close()
+
+    def __enter__(self) -> "VideoPoseEstimator":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()

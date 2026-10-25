@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "live-splat-pose-estimator"
+version = "0.1.0"
+description = "MediaPipe pose estimation prototype for the Group 27 live splat reconstruction pipeline"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3",
+  "opencv-contrib-python>=4.10,<5",
+  "mediapipe"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,6 @@
+models/
+test_input.jpg
+test_video.mp4
+
+*.egg-info/
+__pycache__/
