@@ -1,0 +1,8 @@
+torch
+torchvision
+opencv-python
+numpy
+# optional
+gradio      # app.py
+pytest      # tests/
+mediapipe   # scripts/test_pose_depth_video.py
