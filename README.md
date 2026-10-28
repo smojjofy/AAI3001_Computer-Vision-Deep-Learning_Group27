@@ -23,7 +23,7 @@ OBS Virtual Camera / USB camera / recorded video / RTSP
 ```
 
 It provides OpenCV camera, OBS, recorded-video, and RTSP adapters; deterministic
-replay input for tests; RGB8 normalisation; monotonic IDs; timestamp diagnostics;
+replay input for local validation; RGB8 normalisation; monotonic IDs; timestamp diagnostics;
 a bounded latest-frame-wins queue; stream health; timestamp-paced recorded replay;
 and exponential reconnect backoff. Live sources retry indefinitely by default;
 applications may set a finite reconnect-attempt limit when that is safer.
@@ -57,18 +57,6 @@ If `py` is not configured on this Windows machine, create the environment with:
 ```powershell
 & 'C:\Users\ziven\AppData\Local\Programs\Python\Python313\python.exe' -m venv .venv
 ```
-
-Run tests (no camera, network connection, model download, or private recording
-is needed):
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s modules\stream_handler\tests -v
-```
-
-The tests check colour conversion, frame IDs, timestamp anomaly reporting,
-bounded-queue dropping, invalid frames, replay end-of-stream, and the actual
-OpenCV recorded-video adapter. That integration test generates a three-frame
-primary-colour video at runtime, so no recording is committed to the repository.
 
 ## OBS live setup
 
@@ -143,46 +131,50 @@ mean/max decode latency.
 
 Only the Stream Handler shown above is implemented. The remaining stages and
 feedback path below are the intended design, not a working pipeline yet. The
-Frame Processor will validate RGB, resize/normalise, optionally undistort, and
-emit a `ProcessedFrame` with the **same** frame ID, source ID, and timestamp.
+Optical flow now operates immediately on the Stream Handler's available RGB8
+`FramePacket` pairs. The reranker then selects the useful work. The Frame
+Processor executes that selection: it sends a reuse update to the Temporal
+Cache, or prepares the selected refresh frame for depth, motion/pose, and
+foreground estimation. A refresh produces a splat candidate; a Splat Adjustor
+combines that candidate, or the reused cache state, into the state shown by the
+viewer.
 
 ```text
-Stream Handler → FramePacket → Frame Processor → ProcessedFrame
-                                             ↓
-                              small selection buffer → optical flow
-                                                         ↓
-                                      reranker / estimation scheduler
-                                       ├─ reuse → Temporal Cache
-                                       └─ refresh → depth + foreground segmentation
-                                                     + optional human pose/motion
-                                                   → Splat Constructor
-                                                   → Temporal Cache
-                                                          ↓
-                                              Splat Adjustor → Three.js viewer
+Stream Handler → FramePacket → Optical Flow → Reranker
+                                                ↓
+                              Frame Processor decision / dispatch
+                               ├─ reuse → Temporal Cache ────────────┐
+                               └─ refresh → ProcessedFrame            │
+                                              → depth + segmentation   │
+                                              → optional motion / pose  │
+                                              → Splat Constructor ─────┤
+                                                                       ↓
+                                                           Splat Adjustor → Three.js viewer
 
-Temporal Cache ── state confidence / refresh request ──→ reranker
 ```
 
-Optical flow compares processed camera frames, not frames against splats. The
-reranker uses flow, frame quality, and freshness to decide whether another
-estimator result would be useful. The Temporal Cache owns the decision about
-whether its current splat state can still be adjusted confidently; it may ask
-the reranker for a refresh. Low measured motion alone does not require a
-refresh. An optional, configurable maximum refresh interval is a fallback.
-The cache supplies reconstruction state to the viewer on reuse and refresh
-paths, so the viewer need not wait for depth on every captured frame.
+Optical flow compares camera frames, not frames against splats. The reranker
+uses its one retained significant camera frame as the reference for each new
+frame. If the difference is significant, it flushes that reference, copies the
+new frame into its one-entry cache, and sends the new frame to the Frame
+Processor's refresh path. Otherwise the Frame Processor takes the reuse path.
+The reranker does **not** judge splat quality. The Temporal Cache is a separate
+splat-state store used downstream by the Splat Adjustor and viewer; its format
+is not an input to the reranker.
 
-Initial flow selection will benchmark OpenCV DIS at reduced resolution. RAFT
-Small and SEA-RAFT are candidate upgrades if selection or splat adjustment
-needs more accurate flow. Depth Anything 3 Small/Base are candidates for depth;
-the depth model and any human-pose estimator have not been selected or integrated.
+OpenCV DIS is the implemented reduced-resolution baseline. Torchvision RAFT
+Small is an implemented, optional backend when its PyTorch dependencies and
+weights are available; it must be benchmarked against DIS on project footage.
+SEA-RAFT remains a future candidate if selection or splat adjustment needs more
+accurate flow. Depth Anything 3 Small/Base are candidates for depth; the depth
+model and any human-pose estimator have not been selected or integrated.
 Human body pose and camera pose are different outputs. Foreground segmentation
 remains necessary for alpha. Estimator workers may finish at different times;
 their results must be joined by original frame ID and timestamp, never callback
 arrival order. Begin integration with model stubs and recorded fixtures.
 
-The detailed build order and proposed controls are in
-[CVDL_optical_flow_plan.md](../CVDL_optical_flow_plan.md).
+The reranker selection contract is documented in
+[`docs/interfaces/reranker.md`](docs/interfaces/reranker.md).
 
 ## Hardware target and troubleshooting
 
@@ -212,6 +204,5 @@ modules/three_viewer/      later: Three.js rendering
 docs/interfaces/           packet boundary documentation
 ```
 
-Read the relevant `Tasklist.md` before extending a module. Preserve shared packet
-identity and document alpha/depth/coordinate decisions in `shared/` rather than
-making incompatible private formats.
+Preserve shared packet identity and document alpha/depth/coordinate decisions in
+`shared/` rather than making incompatible private formats.

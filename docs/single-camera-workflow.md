@@ -11,17 +11,19 @@ flowchart TD
     PACKET[RGB8 FramePacket<br/>identity, timestamp, quality]
     FLOW[Optical flow<br/>FramePacket pair to FlowResult]
     SELECT[Reranker<br/>bounded selection window]
+    DISPATCH[Frame Processor<br/>execute reuse or refresh]
     PRE[Frame Processor<br/>prepare selected refresh frame]
     SEG[Foreground segmentation<br/>mask + confidence]
     DEPTH[Monocular depth<br/>relative depth + confidence]
     MOTION[Optional human motion or pose]
     FRAME[ConstructionFrame<br/>RGB + mask + depth + flow<br/>optional camera/pose/rig metadata]
 
-    REUSE[Reuse current state<br/>with reliable flow]
+    REUSE[Reuse observation<br/>frame + reliable flow]
     INIT[Depth-guided splat initializer<br/>keyframes only]
     FUSE[Merge, deduplicate, and prune]
     BIND[Optional skeletal binding<br/>when pose/rig data is available]
-    CACHE[Temporal Gaussian cache<br/>timestamped states and confidence]
+    ADJUST[Splat Adjustor<br/>merge reused state or splat candidate]
+    CACHE[Temporal Gaussian cache<br/>persistent states and confidence]
     RENDER[Streaming rasterizer<br/>fast render path]
     OUTPUT[RGBA + relative depth<br/>coverage + uncertainty]
 
@@ -33,8 +35,8 @@ flowchart TD
     FINAL[Final Three.js view]
 
     CAM --> STREAM --> PACKET --> FLOW --> SELECT
-    PACKET --> SELECT
-    SELECT -->|refresh| PRE
+    SELECT --> DISPATCH
+    DISPATCH -->|refresh| PRE
     PRE --> SEG
     PRE --> DEPTH
     PRE --> MOTION
@@ -44,11 +46,12 @@ flowchart TD
     MOTION --> FRAME
     FLOW --> FRAME
 
-    SELECT -->|reuse| REUSE
+    DISPATCH -->|reuse| REUSE
     FRAME --> INIT --> FUSE
-    FUSE --> BIND --> CACHE
-    REUSE --> CACHE
-    CACHE -. refresh request and confidence .-> SELECT
+    FUSE --> BIND --> ADJUST
+    REUSE --> ADJUST
+    CACHE --> ADJUST
+    ADJUST --> CACHE
     CACHE --> RENDER --> OUTPUT --> VIEW
 
     CACHE --> REPLAY --> OPT --> CACHE
@@ -62,7 +65,7 @@ flowchart TD
 
     class CAM,STREAM,PACKET,PRE input;
     class SEG,DEPTH,MOTION,FLOW,FRAME inference;
-    class SELECT,REUSE,INIT,FUSE,BIND,CACHE construct;
+    class SELECT,DISPATCH,REUSE,INIT,FUSE,BIND,ADJUST,CACHE construct;
     class RENDER,OUTPUT,ENV,VIEW,FINAL render;
     class REPLAY,OPT optional;
 ```
@@ -78,9 +81,11 @@ The first implementation should include:
 - Monocular relative-depth estimation.
 - Optical flow for temporal correspondence.
 - Reranking with a bounded selection window and an optional periodic refresh fallback.
+- A Frame Processor decision/dispatch step: reuse a valid cache state or prepare a refresh frame.
 - Depth-guided Gaussian initialization for keyframes.
 - Merge, deduplication, confidence tracking, and pruning.
 - Temporal reuse for non-keyframes.
+- Splat adjustment that merges a reused cache state or a new depth-guided splat candidate.
 - RGBA, relative depth, coverage, and uncertainty output.
 - Three.js rendering over a static environment or background.
 

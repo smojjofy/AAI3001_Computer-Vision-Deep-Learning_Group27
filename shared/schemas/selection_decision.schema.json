@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://group27.local/schemas/selection_decision.schema.json",
+  "title": "SelectionDecision metadata envelope",
+  "description": "A reranker decision that tells the Frame Processor to reuse a cache path or prepare a refresh frame. The reranker compares the current frame with its one retained significant-frame record and does not read splat state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "action", "source_id", "selected_frame_id", "selected_capture_timestamp_ns", "flow_current_frame_id", "flow_current_capture_timestamp_ns", "reason"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "action": {"enum": ["reuse", "refresh"]},
+    "source_id": {"type": "string", "minLength": 1},
+    "selected_frame_id": {"type": "integer", "minimum": 0},
+    "selected_capture_timestamp_ns": {"type": "integer", "minimum": 0},
+    "flow_current_frame_id": {"type": "integer", "minimum": 0},
+    "flow_current_capture_timestamp_ns": {"type": "integer", "minimum": 0},
+    "reference_frame_id": {"type": ["integer", "null"], "minimum": 0},
+    "reference_capture_timestamp_ns": {"type": ["integer", "null"], "minimum": 0},
+    "reason": {"enum": ["bootstrap", "significant_difference", "not_significant", "flow_unavailable"]},
+    "difference_score": {"type": "number", "minimum": 0}
+  }
+}

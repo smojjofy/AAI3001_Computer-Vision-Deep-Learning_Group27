@@ -1,4 +1,4 @@
-# FlowResult: Optical Flow to scheduler and Temporal Cache
+# FlowResult: Optical Flow to Reranker
 
 `FlowResult` compares **two camera frames**, never a camera frame to splats.
 The in-process object stores a float32 `[height, width, 2]` flow array and a
@@ -22,9 +22,13 @@ change starts a new tracker pair. `no_previous_frame`, `invalid_timestamps`, and
 fresh estimation rather than reuse stale geometry. `elapsed_ns` records actual
 time between the compared frames and is **not** inferred from frame IDs.
 
-The Temporal Cache owns its state-confidence and refresh decision. Flow only
-reports frame correspondence and validity. Newly exposed surfaces require fresh
-depth; flow cannot fill them in.
+The reranker consumes the frame/flow observation and compares each new frame
+with its own one-entry record of the last significant camera frame. A
+significant difference replaces that record and yields `refresh`; otherwise it
+yields `reuse`. The Frame Processor executes that decision. The Temporal Cache
+is a downstream splat-format store and is not an input to the reranker. Flow
+only reports frame correspondence and validity. Newly exposed surfaces require
+fresh depth; flow cannot fill them in.
 
 `OpticalFlowTracker.push(frame)` accepts the Stream Handler's RGB8
 `FramePacket` directly. A compatible processed frame could also be passed if a
