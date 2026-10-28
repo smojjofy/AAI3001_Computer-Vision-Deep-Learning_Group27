@@ -32,6 +32,12 @@ skip IDs, so consumers must not infer adjacency from frame numbers. Estimator
 completion order is irrelevant: refresh results are joined by this identity
 before Splat Construction.
 
+The implementation is `modules/reranker`. `StreamRerankerConsumer` directly
+links the Stream Handler queue to a DIS or RAFT estimator: it passes the
+reranker's retained frame as the previous flow frame and the dequeued packet as
+the current frame. This ensures the difference score is reference-to-current,
+not merely adjacent-frame motion.
+
 The initial implementation should make deterministic threshold decisions and
 record the measured difference score. It should not learn a ranking model until
 recorded replay shows that a hand-tuned threshold cannot meet latency and

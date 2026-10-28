@@ -129,8 +129,8 @@ mean/max decode latency.
 
 ## Planned pipeline: flow-guided reuse and selective estimation
 
-Only the Stream Handler shown above is implemented. The remaining stages and
-feedback path below are the intended design, not a working pipeline yet. The
+The Stream Handler, Optical Flow, and Reranker are implemented. The downstream
+stages below remain intended design, not a working integrated pipeline yet. The
 Optical flow now operates immediately on the Stream Handler's available RGB8
 `FramePacket` pairs. The reranker then selects the useful work. The Frame
 Processor executes that selection: it sends a reuse update to the Temporal
@@ -140,7 +140,7 @@ combines that candidate, or the reused cache state, into the state shown by the
 viewer.
 
 ```text
-Stream Handler → FramePacket → Optical Flow → Reranker
+Stream Handler → FramePacket → Optical Flow (retained reference → current) → Reranker
                                                 ↓
                               Frame Processor decision / dispatch
                                ├─ reuse → Temporal Cache ────────────┐

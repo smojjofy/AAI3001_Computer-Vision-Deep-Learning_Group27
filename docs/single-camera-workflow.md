@@ -9,7 +9,7 @@ flowchart TD
     CAM[Static webcam or IP camera]
     STREAM[Stream Handler<br/>decode, timestamp, reconnect]
     PACKET[RGB8 FramePacket<br/>identity, timestamp, quality]
-    FLOW[Optical flow<br/>FramePacket pair to FlowResult]
+    FLOW[Optical flow<br/>retained reference to current FramePacket]
     SELECT[Reranker<br/>bounded selection window]
     DISPATCH[Frame Processor<br/>execute reuse or refresh]
     PRE[Frame Processor<br/>prepare selected refresh frame]
@@ -35,6 +35,7 @@ flowchart TD
     FINAL[Final Three.js view]
 
     CAM --> STREAM --> PACKET --> FLOW --> SELECT
+    SELECT -. retained significant frame .-> FLOW
     SELECT --> DISPATCH
     DISPATCH -->|refresh| PRE
     PRE --> SEG

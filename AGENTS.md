@@ -21,7 +21,7 @@ The initial visual signals are RGB, foreground segmentation, relative depth, and
   - `stream_handler/` receives and timestamps webcam/IP-camera frames.
   - `frame_processor/` executes reranker-directed reuse or refresh and preprocesses refresh frames.
   - `inference/` provides direct-frame optical flow plus refresh-only segmentation, depth, and motion.
-  - `reranker/` will compare each incoming frame with one retained significant frame and choose reuse or refresh.
+  - `reranker/` compares each incoming frame with one retained significant frame and chooses reuse or refresh.
   - `splat_constructor/` converts inference output into Gaussian states.
   - `temporal_cache/` stores, interpolates, and updates timestamped splat states downstream of reranking.
   - `splat_adjustor/` will merge reused cache state and new splat candidates.
