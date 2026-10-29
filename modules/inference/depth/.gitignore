@@ -1,6 +1,5 @@
 models/*.pth
 models/*/
-third_party/
 test_output_depth.png
 test_outputs/
 __pycache__/
