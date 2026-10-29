@@ -12,9 +12,9 @@ import numpy as np
 DEPTH_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(DEPTH_ROOT))
 
-from depth_estimator import DepthEstimator, find_default_model
-from depth_estimator.estimator import DEFAULT_INPUT_SIZE
-from depth_estimator.utils import colorize, colorize_confidence
+from src import DepthEstimator, find_default_model
+from src.estimator import DEFAULT_INPUT_SIZE
+from src.utils import colorize, colorize_confidence
 
 # list the image types that can be used for depth estimation
 MODELS_DIR = DEPTH_ROOT / "models"
