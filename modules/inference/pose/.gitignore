@@ -1,6 +1,10 @@
 models/
-test_input.jpg
-test_video.mp4
+test_images/
+comparison_outputs/
+comparison_outputs_expanded/
+comparison_outputs_lower_body_cutoff/
+comparison_outputs_expanded_with_occlusion/
 
 *.egg-info/
 __pycache__/
+*.pyc

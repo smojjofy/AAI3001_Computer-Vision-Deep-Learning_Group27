@@ -6,12 +6,10 @@ from .contracts import (
 
 from .estimator import (
     PoseEstimator,
-    VideoPoseEstimator,
 )
 
 __all__ = [
     "PoseEstimator",
-    "VideoPoseEstimator",
     "PoseEstimation",
     "PoseFrameResult",
     "PoseLandmark",

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import cv2
+import argparse
 
 from mediapipe.tasks.python.vision import pose_landmarker
 
@@ -15,24 +16,38 @@ MODEL_PATH = (
     / "inference"
     / "pose"
     / "models"
-    / "pose_landmarker.task"
+    / "pose_landmarker_lite.task"
 )
 
-IMAGE_PATH = (
-    ROOT
-    / "modules"
-    / "inference"
-    / "pose"
-    / "test_input.jpg"
-)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Visualise MediaPipe pose estimation on a test image."
+    )
+
+    parser.add_argument(
+        "image",
+        help="Filename of an image inside test_images/",
+    )
+
+    return parser.parse_args()
 
 
 def main() -> None:
-    image_bgr = cv2.imread(str(IMAGE_PATH))
+    args = parse_args()
+
+    image_path = (
+        ROOT
+        / "modules"
+        / "inference"
+        / "pose"
+        / "test_images"
+        / args.image
+    )
+    image_bgr = cv2.imread(str(image_path))
 
     if image_bgr is None:
         raise FileNotFoundError(
-            f"Unable to read test image: {IMAGE_PATH}"
+            f"Unable to read test image: {image_path}"
         )
 
     image_rgb = cv2.cvtColor(
@@ -48,6 +63,16 @@ def main() -> None:
         return
 
     height, width = image_bgr.shape[:2]
+
+    line_thickness = max(
+        2,
+        round(min(width, height) / 300),
+    )
+
+    landmark_radius = max(
+        4,
+        line_thickness * 2,
+    )
 
     # Draw skeleton connections first.
     for connection in pose_landmarker.PoseLandmarksConnections.POSE_LANDMARKS:
@@ -69,7 +94,7 @@ def main() -> None:
             start_point,
             end_point,
             (0, 255, 0),
-            2,
+            line_thickness,
         )
 
     # Draw the individual landmarks.
@@ -80,13 +105,26 @@ def main() -> None:
         cv2.circle(
             image_bgr,
             (x, y),
-            4,
+            landmark_radius,
             (0, 0, 255),
             -1,
         )
 
+    window_name = "MediaPipe Pose Estimator Prototype"
+
+    cv2.namedWindow(
+        window_name,
+        cv2.WINDOW_NORMAL,
+    )
+
+    cv2.resizeWindow(
+        window_name,
+        1200,
+        800,
+    )
+
     cv2.imshow(
-        "MediaPipe Pose Estimator Prototype",
+        window_name,
         image_bgr,
     )
 

@@ -13,7 +13,7 @@ MODEL_PATH = (
     / "inference"
     / "pose"
     / "models"
-    / "pose_landmarker.task"
+    / "pose_landmarker_lite.task"
 )
 
 IMAGE_PATH = (
