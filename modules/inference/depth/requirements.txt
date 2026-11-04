@@ -6,3 +6,4 @@ numpy
 gradio      # app.py
 pytest      # tests/
 mediapipe   # scripts/test_pose_depth_video.py
+ultralytics # YOLO depth (yolo_depth.py, benchmark, comparison tab)
