@@ -12,6 +12,10 @@ from .estimator import (
     find_repo,
     resolve_device,
 )
+from .yolo_depth import (
+    DEFAULT_YOLO_DEPTH,
+    YoloDepthEstimator,
+)
 from .normalize import (
     edge_confidence,
     normalize_prediction,
@@ -19,6 +23,8 @@ from .normalize import (
 # The __all__ variable is a list of public objects of that module, as interpreted by import *. It defines the symbols that will be exported when the module is imported using the from module import * syntax. This helps to control the namespace and avoid polluting it with unnecessary or internal symbols.
 __all__ = [
     "DepthEstimator",
+    "YoloDepthEstimator",
+    "DEFAULT_YOLO_DEPTH",
     "DepthEstimation",
     "DepthFrameResult",
     "DepthKind",
