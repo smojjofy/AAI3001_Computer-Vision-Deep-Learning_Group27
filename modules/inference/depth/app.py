@@ -161,18 +161,18 @@ _yolo_depths: dict[tuple, object] = {}   # loaded once per (model, device, imgsz
  
 # Load a YOLO depth model once. Weights download into models/ on first use (git-ignored).
 def get_yolo_depth(name: str, device: str, imgsz: int):
-    from depth_estimator import YoloDepthEstimator
+    from src import YoloDepthEstimator
     key = (name, device, int(imgsz))
     if key not in _yolo_depths:
         _yolo_depths[key] = YoloDepthEstimator(name, device=device, imgsz=int(imgsz))
     return _yolo_depths[key]
  
  
-# Explain an import failure honestly: either ultralytics itself is missing, or the depth_estimator files are out of date.
+# Explain an import failure honestly: either ultralytics itself is missing, or the src files are out of date.
 def import_error_message(e: ImportError) -> str:
     return (f"**Couldn't import YOLO depth.**\n\n```\n{e}\n```\n\n"
             "If this says `ultralytics` is missing: `pip install ultralytics`. If it mentions "
-            "`YoloDepthEstimator` or `yolo_depth`: the updated `depth_estimator` files aren't in this folder.")
+            "`YoloDepthEstimator` or `yolo_depth`: the updated `src` files aren't in this folder.")
  
  
 # Run YOLO depth ONLY (no Depth Anything), so its time is all you wait for. Same outputs as the first tab: slider, depth map (click to read metres), confidence, .npy, info.
