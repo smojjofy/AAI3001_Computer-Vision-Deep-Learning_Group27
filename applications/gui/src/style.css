@@ -78,6 +78,10 @@ input {
   background: #707785;
 }
 
+.status.is-live .status-dot {
+  background: #22c55e;
+}
+
 .viewer-grid {
   flex: 1;
   min-height: 0;

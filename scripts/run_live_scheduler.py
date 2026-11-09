@@ -12,6 +12,7 @@ import json
 import math
 from pathlib import Path
 import sys
+import threading
 import time
 
 
@@ -23,6 +24,7 @@ sys.path[:0] = [
     str(ROOT / "applications"),
 ]
 
+from backend.preview_server import PreviewServer  # noqa: E402
 from live_pipeline import LiveRerankerScheduler, RefreshDispatcher  # noqa: E402
 from optical_flow import FlowConfig, create_estimator  # noqa: E402
 from reranker import Reranker, RerankerConfig, StreamRerankerConsumer  # noqa: E402
@@ -39,19 +41,22 @@ def main() -> None:
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--camera-backend", choices=("auto", "dshow", "msmf"), default="auto")
     parser.add_argument("--config", type=Path, default=ROOT / "config/optical_flow_raft.example.json")
-    parser.add_argument("--duration-s", type=float, default=20.0)
+    parser.add_argument("--duration-s", type=float, default=20.0,
+                        help="Run length in seconds; 0 runs until Ctrl+C")
     parser.add_argument("--sample-ms", type=float, default=250.0)
     parser.add_argument("--max-reference-age-ms", type=float, default=500.0)
     parser.add_argument("--refresh-work-ms", type=float, default=1000.0)
     parser.add_argument("--queue-capacity", type=int, default=3)
+    parser.add_argument("--gui-preview", action="store_true",
+                        help="Serve the same captured frames to the local GUI on port 8765")
     parser.add_argument("--summary-only", action="store_true")
     args = parser.parse_args()
     if (
         not all(math.isfinite(value) for value in (args.duration_s, args.sample_ms, args.max_reference_age_ms, args.refresh_work_ms))
-        or args.duration_s <= 0 or args.sample_ms <= 0 or args.max_reference_age_ms < 0.000001
+        or args.duration_s < 0 or args.sample_ms <= 0 or args.max_reference_age_ms < 0.000001
         or args.refresh_work_ms < 0 or args.queue_capacity < 1
     ):
-        parser.error("duration, sample interval, and reference age must be positive; worker time non-negative; queue capacity at least one")
+        parser.error("duration and worker time must be non-negative; sample interval and reference age must be positive; queue capacity at least one")
     if args.source == "video":
         if args.path is None or not args.path.is_file():
             parser.error("--source video requires an existing --path")
@@ -76,12 +81,20 @@ def main() -> None:
 
     dispatcher = RefreshDispatcher(simulated_refresh)
     scheduler = LiveRerankerScheduler(consumer, dispatcher, round(args.sample_ms * 1_000_000))
+    preview_server = PreviewServer(handler) if args.gui_preview else None
+    preview_thread = (
+        threading.Thread(target=preview_server.serve_forever, name="gui-preview", daemon=True)
+        if preview_server is not None else None
+    )
     actions: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
     started = time.monotonic()
-    deadline = started + args.duration_s
+    deadline = math.inf if args.duration_s == 0 else started + args.duration_s
     handler.start()
     try:
+        if preview_thread is not None:
+            preview_thread.start()
+            print("GUI preview ready at http://127.0.0.1:8765/api/preview", flush=True)
         while time.monotonic() < deadline:
             observation = scheduler.poll(timeout_s=0.25)
             if observation is None:
@@ -109,6 +122,11 @@ def main() -> None:
         capture_finished = time.monotonic()
         capture_health_before_stop = str(handler.health())
         handler.stop()
+        if preview_server is not None:
+            if preview_thread is not None and preview_thread.is_alive():
+                preview_server.shutdown()
+                preview_thread.join(timeout=2)
+            preview_server.server_close()
         dispatcher.close(drain=True)
 
     print(json.dumps({"summary": {

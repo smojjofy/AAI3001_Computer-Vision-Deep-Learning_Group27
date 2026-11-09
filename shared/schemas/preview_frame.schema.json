@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://group27.local/schemas/preview_frame.schema.json",
+  "title": "GUI RGB preview frame",
+  "description": "A display-only JPEG derived from one Stream Handler FramePacket. Frame identity and capture timing match the original packet; inference continues to use its RGB8 buffer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "frame_id", "source_id", "capture_timestamp_ns", "timestamp_origin", "width", "height", "jpeg_base64", "stream_health"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "frame_id": {"type": "integer", "minimum": 0},
+    "source_id": {"type": "string", "minLength": 1},
+    "capture_timestamp_ns": {"type": "string", "pattern": "^[0-9]+$", "description": "Decimal string preserves full nanosecond precision in JavaScript."},
+    "timestamp_origin": {"enum": ["source_presentation", "decode_monotonic"]},
+    "width": {"type": "integer", "minimum": 1},
+    "height": {"type": "integer", "minimum": 1},
+    "jpeg_base64": {"type": "string", "minLength": 1, "contentEncoding": "base64", "contentMediaType": "image/jpeg"},
+    "stream_health": {"enum": ["closed", "connecting", "healthy", "reconnecting", "stalled"]}
+  }
+}

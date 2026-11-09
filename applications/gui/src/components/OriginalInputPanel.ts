@@ -59,12 +59,13 @@ export class OriginalInputPanel {
     return this.element
   }
 
-  showWaiting(): void {
+  showWaiting(message = 'Waiting for original input'): void {
     this.canvas.style.display = 'none'
     this.placeholder.style.display = 'flex'
+    this.placeholder.textContent = message
 
     this.frameLabel.textContent = 'Frame: --'
-    this.timestampLabel.textContent = 'Waiting for input'
+    this.timestampLabel.textContent = message
   }
 
   showImage(
@@ -89,7 +90,7 @@ export class OriginalInputPanel {
     this.placeholder.style.display = 'none'
 
     this.frameLabel.textContent =
-      `Frame: ${meta.frameId ?? '--'}`
+      `Frame: ${meta.frameId ?? '--'}${meta.sourceId ? ` · ${meta.sourceId}` : ''}`
 
     this.timestampLabel.textContent =
       meta.timestamp ?? 'Input received'
