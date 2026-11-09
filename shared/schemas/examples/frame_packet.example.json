@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "frame_id": 42,
+  "source_id": "obs-virtual-camera",
+  "capture_timestamp_ns": 48721900123456,
+  "received_timestamp_ns": 48721906890123,
+  "timestamp_origin": "decode_monotonic",
+  "image": {
+    "width": 1280,
+    "height": 720,
+    "stride_bytes": 3840,
+    "pixel_format": "RGB8",
+    "payload_encoding": "raw-rgb8",
+    "payload_bytes": 2764800
+  },
+  "quality": {
+    "decode_latency_ns": 6410200,
+    "frame_age_ns": 100900,
+    "frame_age_available": true,
+    "queue_depth": 1,
+    "dropped_frame_count": 0,
+    "timestamp_status": "ok"
+  }
+}
