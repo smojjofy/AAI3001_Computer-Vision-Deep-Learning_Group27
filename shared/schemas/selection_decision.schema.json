@@ -16,7 +16,7 @@
     "flow_current_capture_timestamp_ns": {"type": "integer", "minimum": 0},
     "reference_frame_id": {"type": ["integer", "null"], "minimum": 0},
     "reference_capture_timestamp_ns": {"type": ["integer", "null"], "minimum": 0},
-    "reason": {"enum": ["bootstrap", "significant_difference", "not_significant", "flow_unavailable"]},
+    "reason": {"enum": ["bootstrap", "significant_difference", "not_significant", "flow_unavailable", "reference_expired"]},
     "difference_score": {"type": "number", "minimum": 0}
   }
 }

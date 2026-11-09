@@ -14,6 +14,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a live-splat frame source without storing imagery.")
     parser.add_argument("--source", choices=("camera", "obs", "video", "rtsp"), default="obs")
     parser.add_argument("--device", type=int, default=0, help="Camera index for --source camera or obs.")
+    parser.add_argument("--camera-backend", choices=("auto", "dshow", "msmf"), default="auto")
     parser.add_argument("--path", help="Path for --source video.")
     parser.add_argument("--url", help="RTSP URL for --source rtsp; do not put credentials in shell history.")
     parser.add_argument("--duration", type=float, default=15.0, help="Diagnostic run duration in seconds.")
@@ -27,9 +28,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def _source_from_args(args: argparse.Namespace):
     if args.source == "obs":
-        return OBSVirtualCameraSource(args.device)
+        return OBSVirtualCameraSource(args.device, backend=args.camera_backend)
     if args.source == "camera":
-        return CameraSource(args.device)
+        return CameraSource(args.device, backend=args.camera_backend)
     if args.source == "video":
         if not args.path:
             raise SystemExit("--path is required for --source video")
@@ -42,7 +43,7 @@ def _source_from_args(args: argparse.Namespace):
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = _parser().parse_args()
-    handler = StreamHandler(_source_from_args(args), queue_capacity=args.queue_capacity)
+    handler = StreamHandler(_source_from_args(args), queue_capacity=args.queue_capacity, max_reconnect_attempts=3)
     handler.start()
     deadline = time.monotonic() + args.duration
     last_report = 0.0
@@ -50,6 +51,8 @@ def main() -> None:
         while time.monotonic() < deadline:
             packet = handler.queue.get(timeout_s=0.5)
             now = time.monotonic()
+            if packet is None and handler.health().value == "closed":
+                break
             if packet and now - last_report >= 1.0:
                 logging.info(
                     "frame=%s %sx%s state=%s queue=%s dropped=%s timestamp=%s",
@@ -62,6 +65,8 @@ def main() -> None:
     finally:
         handler.stop()
         logging.info("final metrics: %s", handler.metrics)
+    if handler.metrics.emitted_frames == 0:
+        raise SystemExit("No frames captured. Check the device index, camera access, or try --camera-backend dshow.")
 
 
 if __name__ == "__main__":

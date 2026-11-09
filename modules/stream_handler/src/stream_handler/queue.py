@@ -27,6 +27,7 @@ class LatestFrameQueue:
         self.capacity = capacity
         self._items: Deque[FramePacket] = deque()
         self._dropped_total = 0
+        self._skipped_total = 0
         self._closed = False
         self._condition = threading.Condition()
 
@@ -69,6 +70,22 @@ class LatestFrameQueue:
                 self._condition.wait(remaining)
             return self._items.popleft() if self._items else None
 
+    def get_latest(self, timeout_s: float | None = None) -> FramePacket | None:
+        """Return the freshest packet, discarding queued predecessors."""
+        with self._condition:
+            deadline = None if timeout_s is None else time.monotonic() + timeout_s
+            while not self._items and not self._closed:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return None
+                self._condition.wait(remaining)
+            if not self._items:
+                return None
+            packet = self._items.pop()
+            self._skipped_total += len(self._items)
+            self._items.clear()
+            return packet
+
     @property
     def depth(self) -> int:
         with self._condition:
@@ -78,6 +95,12 @@ class LatestFrameQueue:
     def dropped_total(self) -> int:
         with self._condition:
             return self._dropped_total
+
+    @property
+    def skipped_total(self) -> int:
+        """Packets discarded when a consumer explicitly selected the latest."""
+        with self._condition:
+            return self._skipped_total
 
     def close(self) -> None:
         with self._condition:

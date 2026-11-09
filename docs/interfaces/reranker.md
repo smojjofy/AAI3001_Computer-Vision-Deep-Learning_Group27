@@ -26,6 +26,14 @@ emits `refresh`. An insignificant difference emits `reuse` and leaves the
 retained reference unchanged. If flow is unavailable, the conservative initial
 policy is `refresh`.
 
+The reference also expires after `max_reference_age_ns` of capture time
+(default 500 ms). This keeps the same time limit across 30, 60, and variable-FPS
+sources when timestamps share an origin and increase. An optional
+`max_reference_gap_frames` provides a second frame-ID bound. Expiry emits
+`reference_expired` and refreshes without running flow against an old reference.
+Neither limit requires storing the intervening images. Validate the time limit
+against subject motion and downstream refresh cost.
+
 `SelectionDecision` must preserve `source_id`, selected frame ID, capture
 timestamp, and the matching flow's current-frame identity. A bounded queue may
 skip IDs, so consumers must not infer adjacency from frame numbers. Estimator

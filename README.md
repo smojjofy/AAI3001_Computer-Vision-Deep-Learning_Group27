@@ -38,25 +38,28 @@ Read its accompanying explanation in [`docs/interfaces/frame_packet.md`](docs/in
 - A physical camera, OBS Virtual Camera, local video, or RTSP source.
 - OBS Studio only when using OBS as the source layer.
 
-The capture install brings in `numpy` and `opencv-python`. MediaPipe, PyTorch,
-Depth Anything, model weights, and the viewer are deliberately not dependencies
-of this module yet.
+The default setup brings in `numpy` and `opencv-python` for the implemented
+Stream Handler, Optical Flow, and Reranker. PyTorch is optional for RAFT Small.
 
 ## Install
 
-Run these PowerShell commands from the repository root:
+Run the device setup script in PowerShell from the repository root. It creates
+`.venv` if needed and installs all three implemented modules in editable mode:
 
 ```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e .\modules\stream_handler
+& .\scripts\setup_device.ps1
 ```
 
-If `py` is not configured on this Windows machine, create the environment with:
+To also install RAFT Small, the script chooses a CPU or NVIDIA PyTorch wheel
+using the device's driver information. Override the wheel when needed:
 
 ```powershell
-& 'C:\Users\ziven\AppData\Local\Programs\Python\Python313\python.exe' -m venv .venv
+& .\scripts\setup_device.ps1 -WithRaft
+& .\scripts\setup_device.ps1 -WithRaft -TorchWheel cpu
 ```
+
+Create a fresh `.venv` on each device; do not copy a virtual environment between
+machines. See `scripts/Tasklist.md` for setup scope.
 
 ## OBS live setup
 
@@ -162,6 +165,19 @@ The reranker does **not** judge splat quality. The Temporal Cache is a separate
 splat-state store used downstream by the Splat Adjustor and viewer; its format
 is not an input to the reranker.
 
+The live scheduling diagnostic consumes the newest queued packet at a configured
+capture-time interval and sends refresh decisions to one simulated slow worker.
+It keeps one replaceable pending refresh request. Run it on a paced recording:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_live_scheduler.py --source video --path data\recordings\flow_eval.mp4 --duration-s 20 --sample-ms 250 --refresh-work-ms 1000 --summary-only
+```
+
+The worker only waits; it does not estimate depth or pose. Reuse decisions are
+diagnostic until a matching Temporal Cache state exists. The ignored local
+`outputs/check_reranker.py` script can exercise reranker decisions sequentially
+without the live queue.
+
 OpenCV DIS is the implemented reduced-resolution baseline. Torchvision RAFT
 Small is an implemented, optional backend when its PyTorch dependencies and
 weights are available; it must be benchmarked against DIS on project footage.
@@ -186,6 +202,7 @@ hardware, reduce depth frequency rather than letting latency accumulate.
 | Symptom | What to check |
 | --- | --- |
 | Cannot open source | Start OBS Virtual Camera, try another device index, and close other camera-using apps. |
+| Windows MSMF camera starts but emits zero frames | Try `--camera-backend dshow` in the live scheduler diagnostic. If OBS owns the physical camera, start OBS Virtual Camera and use `--source obs` with its device index. |
 | `opencv` import error | Re-run the editable install with the `.venv` Python shown above. |
 | Drops constantly increase | Lower source resolution/FPS or speed up the consumer; never replace the bounded queue with an unbounded one. |
 | Reconnects repeat | Check the physical/RTSP source and final `last_error`; keep credentials out of reports. |

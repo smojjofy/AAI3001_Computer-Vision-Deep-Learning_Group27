@@ -36,6 +36,10 @@ class StreamRerankerConsumer:
         packet = self.handler.queue.get(timeout_s=timeout_s)
         if packet is None:
             return None
+        return self.process(packet)
+
+    def process(self, packet: RGBFrame) -> RerankerObservation:
+        """Compare one selected packet with the retained significant frame."""
         started_ns = time.perf_counter_ns()
         reference = self.reranker.reference
         flow = None
@@ -43,6 +47,7 @@ class StreamRerankerConsumer:
             reference is not None
             and reference.source_id == packet.source_id
             and reference.rgb.shape == packet.rgb.shape
+            and not self.reranker.is_reference_expired(packet)
         ):
             flow = self.estimator.estimate(reference, packet)
         decision = self.reranker.decide(packet, flow)

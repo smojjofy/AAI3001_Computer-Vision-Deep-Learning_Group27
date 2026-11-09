@@ -14,6 +14,7 @@ from .contracts import FlowResult, RGBFrame
 DecisionAction = Literal["reuse", "refresh"]
 DecisionReason = Literal[
     "bootstrap", "significant_difference", "not_significant", "flow_unavailable",
+    "reference_expired",
 ]
 
 
@@ -23,12 +24,20 @@ class RerankerConfig:
 
     significant_difference_px: float = 2.0
     minimum_valid_fraction: float = 0.25
+    max_reference_age_ns: int = 500_000_000
+    max_reference_gap_frames: int | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.significant_difference_px) or self.significant_difference_px <= 0:
             raise ValueError("significant_difference_px must be finite and positive")
         if not math.isfinite(self.minimum_valid_fraction) or not 0 <= self.minimum_valid_fraction <= 1:
             raise ValueError("minimum_valid_fraction must be between zero and one")
+        if type(self.max_reference_age_ns) is not int or self.max_reference_age_ns < 1:
+            raise ValueError("max_reference_age_ns must be a positive integer")
+        if self.max_reference_gap_frames is not None and (
+            type(self.max_reference_gap_frames) is not int or self.max_reference_gap_frames < 1
+        ):
+            raise ValueError("max_reference_gap_frames must be a positive integer or None")
 
 
 @dataclass(frozen=True)
@@ -103,6 +112,25 @@ class Reranker:
         """Flush the retained reference, for example when a capture run restarts."""
         self._reference = None
 
+    def is_reference_expired(self, current: RGBFrame) -> bool:
+        reference = self._reference
+        if (
+            reference is None
+            or current.source_id != reference.source_id
+            or current.rgb.shape != reference.rgb.shape
+        ):
+            return False
+        elapsed_ns = current.capture_timestamp_ns - reference.capture_timestamp_ns
+        time_expired = (
+            str(current.timestamp_origin) == reference.timestamp_origin
+            and elapsed_ns >= self.config.max_reference_age_ns
+        )
+        frame_expired = (
+            self.config.max_reference_gap_frames is not None
+            and current.frame_id - reference.frame_id >= self.config.max_reference_gap_frames
+        )
+        return time_expired or frame_expired
+
     def decide(self, current: RGBFrame, flow: FlowResult | None = None) -> SelectionDecision:
         """Return `refresh` for a significant current/reference difference.
 
@@ -113,6 +141,8 @@ class Reranker:
         reference = self._reference
         if reference is None:
             return self._refresh(current, None, "bootstrap", None)
+        if self.is_reference_expired(current):
+            return self._refresh(current, reference, "reference_expired", None)
 
         if (
             flow is None
