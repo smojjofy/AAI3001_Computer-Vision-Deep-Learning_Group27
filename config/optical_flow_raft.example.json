@@ -1,0 +1,11 @@
+{
+  "flow_model": "raft_small",
+  "flow_width": 320,
+  "flow_height": 180,
+  "forward_backward_threshold_px": 1.5,
+  "scene_cut_mean_difference": 0.55,
+  "raft_weights": "default",
+  "raft_checkpoint": null,
+  "raft_device": "auto",
+  "raft_iterations": 12
+}

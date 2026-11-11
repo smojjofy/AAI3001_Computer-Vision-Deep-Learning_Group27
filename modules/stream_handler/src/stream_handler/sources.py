@@ -86,11 +86,15 @@ class OpenCVFrameSource:
         source_id: str,
         finite: bool = False,
         replay_mode: ReplayMode = ReplayMode.FASTEST,
+        camera_backend: str = "auto",
     ) -> None:
+        if camera_backend not in {"auto", "dshow", "msmf"}:
+            raise ValueError("camera_backend must be auto, dshow, or msmf")
         self.location = location
         self.source_id = source_id
         self.finite = finite
         self.replay_mode = replay_mode
+        self.camera_backend = camera_backend
         self._capture = None
         self._capture_lock = threading.Lock()
         self._closed_event = threading.Event()
@@ -102,7 +106,12 @@ class OpenCVFrameSource:
             import cv2
         except ImportError as error:  # keeps replay-only tests dependency-light
             raise RuntimeError("OpenCV is required for camera, video, and RTSP sources") from error
-        capture = cv2.VideoCapture(self.location)
+        backend = {
+            "auto": cv2.CAP_ANY,
+            "dshow": cv2.CAP_DSHOW,
+            "msmf": cv2.CAP_MSMF,
+        }[self.camera_backend]
+        capture = cv2.VideoCapture(self.location, backend)
         if not capture.isOpened():
             capture.release()
             raise SourceReadError(f"could not open source: {self.location}")
@@ -163,15 +172,15 @@ class OpenCVFrameSource:
 
 
 class CameraSource(OpenCVFrameSource):
-    def __init__(self, device_index: int = 0, source_id: str | None = None) -> None:
-        super().__init__(device_index, source_id or f"camera:{device_index}")
+    def __init__(self, device_index: int = 0, source_id: str | None = None, *, backend: str = "auto") -> None:
+        super().__init__(device_index, source_id or f"camera:{device_index}", camera_backend=backend)
 
 
 class OBSVirtualCameraSource(CameraSource):
     """OBS Virtual Camera is an ordinary OS camera device; pass its device index."""
 
-    def __init__(self, device_index: int = 0) -> None:
-        super().__init__(device_index, "obs-virtual-camera")
+    def __init__(self, device_index: int = 0, *, backend: str = "auto") -> None:
+        super().__init__(device_index, "obs-virtual-camera", backend=backend)
 
 
 class RecordedVideoSource(OpenCVFrameSource):

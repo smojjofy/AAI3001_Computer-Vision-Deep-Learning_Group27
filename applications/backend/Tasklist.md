@@ -1,6 +1,6 @@
-# Backend Application Tasklist
+# Backend Application
 
-- [ ] Orchestrate stream, processing, inference, cache, and renderer services.
-- [ ] Expose configuration and health endpoints.
-- [ ] Support live and recorded pipeline modes.
-- [ ] Keep module packet contracts unchanged.
+- Serve a bounded, read-only RGB preview derived from the Stream Handler's latest `FramePacket`.
+- Keep the preview independent of the queue consumed by optical flow and reranking.
+- Support the existing camera, OBS Virtual Camera, recorded-video, and RTSP source modes.
+- Keep preview transport on localhost for development and avoid storing captured images.

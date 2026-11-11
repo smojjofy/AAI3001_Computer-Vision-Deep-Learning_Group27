@@ -23,7 +23,7 @@ OBS Virtual Camera / USB camera / recorded video / RTSP
 ```
 
 It provides OpenCV camera, OBS, recorded-video, and RTSP adapters; deterministic
-replay input for tests; RGB8 normalisation; monotonic IDs; timestamp diagnostics;
+replay input for local validation; RGB8 normalisation; monotonic IDs; timestamp diagnostics;
 a bounded latest-frame-wins queue; stream health; timestamp-paced recorded replay;
 and exponential reconnect backoff. Live sources retry indefinitely by default;
 applications may set a finite reconnect-attempt limit when that is safer.
@@ -38,37 +38,28 @@ Read its accompanying explanation in [`docs/interfaces/frame_packet.md`](docs/in
 - A physical camera, OBS Virtual Camera, local video, or RTSP source.
 - OBS Studio only when using OBS as the source layer.
 
-The capture install brings in `numpy` and `opencv-python`. MediaPipe, PyTorch,
-Depth Anything, model weights, and the viewer are deliberately not dependencies
-of this module yet.
+The default setup brings in `numpy` and `opencv-python` for the implemented
+Stream Handler, Optical Flow, and Reranker. PyTorch is optional for RAFT Small.
 
 ## Install
 
-Run these PowerShell commands from the repository root:
+Run the device setup script in PowerShell from the repository root. It creates
+`.venv` if needed and installs all three implemented modules in editable mode:
 
 ```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e .\modules\stream_handler
+& .\scripts\setup_device.ps1
 ```
 
-If `py` is not configured on this Windows machine, create the environment with:
+To also install RAFT Small, the script chooses a CPU or NVIDIA PyTorch wheel
+using the device's driver information. Override the wheel when needed:
 
 ```powershell
-& 'C:\Users\ziven\AppData\Local\Programs\Python\Python313\python.exe' -m venv .venv
+& .\scripts\setup_device.ps1 -WithRaft
+& .\scripts\setup_device.ps1 -WithRaft -TorchWheel cpu
 ```
 
-Run tests (no camera, network connection, model download, or private recording
-is needed):
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s modules\stream_handler\tests -v
-```
-
-The tests check colour conversion, frame IDs, timestamp anomaly reporting,
-bounded-queue dropping, invalid frames, replay end-of-stream, and the actual
-OpenCV recorded-video adapter. That integration test generates a three-frame
-primary-colour video at runtime, so no recording is committed to the repository.
+Create a fresh `.venv` on each device; do not copy a virtual environment between
+machines. See `scripts/Tasklist.md` for setup scope.
 
 ## OBS live setup
 
@@ -139,32 +130,67 @@ not silently hidden. A handler with no successful frame for its configurable
 stall timeout reports `stalled`; its final metrics also include capture FPS and
 mean/max decode latency.
 
-## Next phase: frame processing and inference
+## Planned pipeline: flow-guided reuse and selective estimation
 
-The Frame Processor will accept a `FramePacket`, validate RGB, resize/normalise,
-optionally undistort it, and emit a `ProcessedFrame` with the **same** frame ID,
-source ID, and timestamp.
+The Stream Handler, Optical Flow, and Reranker are implemented. The downstream
+stages below remain intended design, not a working integrated pipeline yet. The
+Optical flow now operates immediately on the Stream Handler's available RGB8
+`FramePacket` pairs. The reranker then selects the useful work. The Frame
+Processor executes that selection: it sends a reuse update to the Temporal
+Cache, or prepares the selected refresh frame for depth, motion/pose, and
+foreground estimation. A refresh produces a splat candidate; a Splat Adjustor
+combines that candidate, or the reused cache state, into the state shown by the
+viewer.
 
 ```text
-FramePacket
-  → Frame Processor → ProcessedFrame
-  → parallel workers
-       ├─ segmentation → foreground alpha mask
-       ├─ MediaPipe Pose → body landmarks
-       ├─ Depth Anything V2 Small → relative depth
-       └─ optical flow → current/prior-frame motion
-  → asynchronous join by original frame ID + timestamp
-  → InferencePacket → Splat Constructor
+Stream Handler → FramePacket → Optical Flow (retained reference → current) → Reranker
+                                                ↓
+                              Frame Processor decision / dispatch
+                               ├─ reuse → Temporal Cache ────────────┐
+                               └─ refresh → ProcessedFrame            │
+                                              → depth + segmentation   │
+                                              → optional motion / pose  │
+                                              → Splat Constructor ─────┤
+                                                                       ↓
+                                                           Splat Adjustor → Three.js viewer
+
 ```
 
-Workers finish at different times. Their outputs must be joined by source frame
-identity, never callback arrival order. Start with model stubs to prove that
-joining works, then add segmentation, MediaPipe, and Depth Anything one by one.
-The viewer can render at 30 FPS while depth updates at a sustainable lower rate.
+Optical flow compares camera frames, not frames against splats. The reranker
+uses its one retained significant camera frame as the reference for each new
+frame. If the difference is significant, it flushes that reference, copies the
+new frame into its one-entry cache, and sends the new frame to the Frame
+Processor's refresh path. Otherwise the Frame Processor takes the reuse path.
+The reranker does **not** judge splat quality. The Temporal Cache is a separate
+splat-state store used downstream by the Splat Adjustor and viewer; its format
+is not an input to the reranker.
 
-MediaPipe supplies approximate single-camera pose landmarks, not full motion
-capture. Depth Anything V2 Small supplies **relative**, not LiDAR-grade metric,
-depth. A separate segmentation model is necessary for foreground alpha.
+The live scheduling diagnostic consumes the newest queued packet at a configured
+capture-time interval and sends refresh decisions to one simulated slow worker.
+It keeps one replaceable pending refresh request. Run it on a paced recording:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_live_scheduler.py --source video --path data\recordings\flow_eval.mp4 --duration-s 20 --sample-ms 250 --refresh-work-ms 1000 --summary-only
+```
+
+The worker only waits; it does not estimate depth or pose. Reuse decisions are
+diagnostic until a matching Temporal Cache state exists. The ignored local
+`outputs/check_reranker.py` script can exercise reranker decisions sequentially
+without the live queue.
+
+OpenCV DIS is the implemented reduced-resolution baseline. Torchvision RAFT
+Small is an implemented, optional backend when its PyTorch dependencies and
+weights are available; it must be benchmarked against DIS on project footage.
+SEA-RAFT remains a future candidate if selection or splat adjustment needs more
+accurate flow. Depth Anything 3 Small/Base are candidates for depth; the depth
+model and any human-pose estimator have not been selected or integrated.
+Human body pose and camera pose are different outputs. Foreground segmentation
+remains necessary for alpha. Estimator workers may finish at different times;
+their results must be joined by original frame ID and timestamp, never callback
+arrival order. Begin integration with model stubs and recorded fixtures.
+
+The reranker selection contract is documented in
+[`docs/interfaces/reranker.md`](docs/interfaces/reranker.md).
 
 ## Hardware target and troubleshooting
 
@@ -176,6 +202,7 @@ hardware, reduce depth frequency rather than letting latency accumulate.
 | Symptom | What to check |
 | --- | --- |
 | Cannot open source | Start OBS Virtual Camera, try another device index, and close other camera-using apps. |
+| Windows MSMF camera starts but emits zero frames | Try `--camera-backend dshow` in the live scheduler diagnostic. If OBS owns the physical camera, start OBS Virtual Camera and use `--source obs` with its device index. |
 | `opencv` import error | Re-run the editable install with the `.venv` Python shown above. |
 | Drops constantly increase | Lower source resolution/FPS or speed up the consumer; never replace the bounded queue with an unbounded one. |
 | Reconnects repeat | Check the physical/RTSP source and final `last_error`; keep credentials out of reports. |
@@ -187,13 +214,12 @@ hardware, reduce depth frequency rather than letting latency accumulate.
 shared/schemas/            source-of-truth packet definitions
 modules/stream_handler/    implemented capture slice
 modules/frame_processor/   next: resize, normalise, optional undistort
-modules/inference/         next: segmentation, depth, pose, flow
+modules/inference/         next: flow, segmentation, depth; optional human pose
 modules/splat_constructor/ later: depth/mask to Gaussian states
-modules/temporal_cache/    later: temporal smoothing/interpolation
+modules/temporal_cache/    later: state reuse, refresh feedback, smoothing
 modules/three_viewer/      later: Three.js rendering
 docs/interfaces/           packet boundary documentation
 ```
 
-Read the relevant `Tasklist.md` before extending a module. Preserve shared packet
-identity and document alpha/depth/coordinate decisions in `shared/` rather than
-making incompatible private formats.
+Preserve shared packet identity and document alpha/depth/coordinate decisions in
+`shared/` rather than making incompatible private formats.

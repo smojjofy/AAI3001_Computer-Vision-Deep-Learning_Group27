@@ -1,0 +1,8 @@
+{
+  "flow_model": "opencv_dis",
+  "flow_width": 320,
+  "flow_height": 180,
+  "dis_preset": "fast",
+  "forward_backward_threshold_px": 1.5,
+  "scene_cut_mean_difference": 0.55
+}

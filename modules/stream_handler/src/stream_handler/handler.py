@@ -52,6 +52,8 @@ class StreamHandler:
         self.source = source
         self.queue = LatestFrameQueue(queue_capacity)
         self.metrics = StreamMetrics()
+        self._latest_packet: FramePacket | None = None
+        self._latest_packet_lock = threading.Lock()
         self._next_frame_id = 0
         self._last_source_timestamp_ns: int | None = None
         self._reconnect_initial_s = reconnect_initial_s
@@ -101,11 +103,19 @@ class StreamHandler:
             packet,
             lambda accounting: self._set_queue_quality(packet, accounting.depth, accounting.dropped_total),
         )
+        with self._latest_packet_lock:
+            self._latest_packet = packet
         self.metrics.emitted_frames += 1
         self._record_success(received_ns, packet.quality.decode_latency_ns)
         source_health = self.source.health()
         self.metrics.state = source_health if source_health is not StreamHealth.CLOSED else StreamHealth.HEALTHY
         return packet
+
+    @property
+    def latest_packet(self) -> FramePacket | None:
+        """Read the newest capture without consuming the pipeline queue."""
+        with self._latest_packet_lock:
+            return self._latest_packet
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():

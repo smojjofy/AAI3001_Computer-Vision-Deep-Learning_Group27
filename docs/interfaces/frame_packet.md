@@ -4,6 +4,11 @@
 between capture and image processing; it intentionally contains no depth, pose,
 segmentation, alpha, flow, or splat data.
 
+The GUI's read-only preview may encode the newest packet as a smaller JPEG
+without consuming the pipeline queue. Its frame ID, source ID, and capture
+timestamp still identify the original packet. See
+`shared/schemas/preview_frame.schema.json` for the display transport.
+
 The serialisation-safe metadata envelope is defined by
 [`shared/schemas/frame_packet.schema.json`](../../shared/schemas/frame_packet.schema.json).
 The in-process Python representation is `stream_handler.FramePacket`.

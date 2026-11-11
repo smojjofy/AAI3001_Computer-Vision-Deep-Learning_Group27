@@ -1,5 +1,5 @@
 {
-  "purpose": "Deterministic metadata-only replay fixture; RGB planes are generated in unit tests.",
+  "purpose": "Deterministic metadata-only replay fixture; RGB planes are supplied by the replay caller.",
   "source_id": "fixture-camera",
   "frames": [
     {"frame_id": 0, "source_timestamp_ns": 1000000000, "width": 2, "height": 2, "pixel_format": "RGB8"},
