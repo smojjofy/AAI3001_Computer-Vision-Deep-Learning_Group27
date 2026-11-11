@@ -11,7 +11,8 @@ import numpy as np
 DEPTH_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DEPTH_ROOT))
  
-from src import DEFAULT_YOLO_DEPTH, YoloDepthEstimator, resolve_device
+from src import DEFAULT_YOLO_DEPTH, PoseDepthPipeline, YoloDepthEstimator, resolve_device
+from src.pipeline import DEFAULT_POSE_MODEL
 from src.yolo_depth import DEFAULT_YOLO_IMGSZ
  
 IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -22,7 +23,10 @@ IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".bmp"}
 def load_frames(args) -> list[np.ndarray]:
     """RGB frames, cycled from a folder of images."""
     folder = Path(args.images)
-    paths = sorted(p for p in folder.iterdir() if p.suffix.lower() in IMAGE_TYPES) if folder.is_dir() else []
+    if folder.is_file():
+        paths = [folder]                                  # a single image is fine too
+    else:
+        paths = sorted(p for p in folder.iterdir() if p.suffix.lower() in IMAGE_TYPES) if folder.is_dir() else []
     if not paths:
         raise FileNotFoundError(f"No .jpg/.png images in {folder}")
     images = [cv2.imdecode(np.fromfile(str(p), dtype=np.uint8), cv2.IMREAD_COLOR) for p in paths]
@@ -88,6 +92,25 @@ def bench(label, estimator, frames, warmup) -> list[dict]:
     ]
  
  
+def bench_pipeline(label, pipe, frames, warmup, sync, depths=None) -> list[dict]:
+    """Times process_frame end to end, plus the pose / depth split it reports."""
+    stages = {"pose": [], "depth": []}
+ 
+    def run(i_frame):
+        i, frame = i_frame
+        out = pipe.process_frame(frame, i, "benchmark", i, depth=None if depths is None else depths[i])
+        if i >= warmup:
+            stages["pose"].append(out.timings_ms["pose"])
+            stages["depth"].append(out.timings_ms["depth"])
+ 
+    total = time_calls(run, list(enumerate(frames)), warmup, sync)
+    return [
+        summarize(f"{label} (total: pose + depth + joints)", total),
+        summarize(f"{label}   of which pose", np.array(stages["pose"])),
+        summarize(f"{label}   of which depth", np.array(stages["depth"])),
+    ]
+ 
+ 
 # ------------------------------------------------------------ main
  
 def main() -> None:
@@ -101,6 +124,10 @@ def main() -> None:
                         help="yolo26n-depth.pt (fastest), yolo26s-depth.pt, yolo26m-depth.pt, ...")
     parser.add_argument("--yolo-imgsz", type=int, default=DEFAULT_YOLO_IMGSZ)
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, mps")
+    parser.add_argument("--pipeline", action="store_true", help="also time pose + YOLO depth together")
+    parser.add_argument("--pipeline-zed", action="store_true",
+                        help="also time pose + depth passed in (ZED-style; YOLO skipped)")
+    parser.add_argument("--pose-model", default=str(DEFAULT_POSE_MODEL))
     parser.add_argument("--save", default="", help="also write results to this .json file")
     args = parser.parse_args()
  
@@ -114,6 +141,17 @@ def main() -> None:
         print(f"YOLO depth: {Path(est.model_name).name}, imgsz={est.imgsz}, "
               f"dtype={est.settings['dtype']}, output={est.kind}")
         rows = bench(f"YOLO depth {Path(args.yolo_model).stem}", est, frames, args.warmup)
+ 
+        if args.pipeline or args.pipeline_zed:
+            sync = make_sync(est.device)
+            pipe = PoseDepthPipeline(args.pose_model, depth_estimator=est)   # shares the loaded YOLO
+            print(f"Pipeline: MediaPipe {Path(args.pose_model).name} + depth")
+            if args.pipeline:
+                rows += bench_pipeline("Pipeline, YOLO depth", pipe, frames, args.warmup, sync)
+            if args.pipeline_zed:
+                depths = [est.predict_raw(f) for f in frames]       # raw metres, like a ZED depth map (not timed)
+                rows += bench_pipeline("Pipeline, ZED-style depth", pipe, frames, args.warmup, sync, depths)
+            pipe._pose.close()                                      # YOLO is closed by its own with-block
  
     print()
     print(f"{'model':<66} {'median':>8} {'mean':>8} {'p95':>8} {'FPS':>7}")
