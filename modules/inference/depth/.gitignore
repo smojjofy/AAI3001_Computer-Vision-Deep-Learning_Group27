@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 .gradio/
 !models/*.pt
+test_outputs/
+zed_fake/
+zed_fake_out/
+*.npy

@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from .contracts import DepthEstimation, DepthFrameResult
-from .estimator import MODELS_DIR, resolve_device
+from .utils import MODELS_DIR, resolve_device
 from .normalize import normalize_prediction
 
 DEFAULT_YOLO_DEPTH = "yolo26n-depth.pt"     # n = fastest; s / m / l are bigger and slower

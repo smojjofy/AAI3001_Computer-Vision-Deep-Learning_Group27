@@ -10,29 +10,15 @@ import numpy as np
  
 # set up path and insert it to sys.path for module imports
 DEPTH_ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(DEPTH_ROOT))
+POSE_ROOT = DEPTH_ROOT.parent / "pose"
+sys.path.insert(0, str(DEPTH_ROOT))                  # so "from src import ..." works from any folder
+sys.path.insert(0, str(POSE_ROOT / "src"))           # pose_estimator package (teammate's MediaPipe module)
  
-from src import DepthEstimator, find_default_model
-from src.estimator import DEFAULT_INPUT_SIZE
+from src.pose_depth import draw_pose_depth, fuse_pose_depth, joint_table
 from src.utils import colorize, colorize_confidence
- 
-# The comparison tab reuses the drawing code from scripts/compare_depth_yolo.py
-sys.path.insert(0, str(DEPTH_ROOT / "scripts"))
-from scripts.compare_depth_yolo import compare_panels
 from src.yolo_depth import DEFAULT_YOLO_IMGSZ
  
-# list the image types that can be used for depth estimation
-MODELS_DIR = DEPTH_ROOT / "models"
-IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
- 
-_estimators: dict[tuple, DepthEstimator] = {}   # loaded once per (model, device, input size), then reused
-_runs: dict[str, int] = {}
- 
-# Find all available models in directory then sort them, if none found return the default model path
- 
-def available_models() -> list[str]:
-    found = sorted(str(p.relative_to(DEPTH_ROOT)) for p in MODELS_DIR.glob("*.pth")) if MODELS_DIR.is_dir() else []
-    return found or [find_default_model()]
+_runs: dict[tuple, int] = {}   # how many times each model has run (first run includes warm-up)
  
 # Devices offered in the dropdown: "auto" plus whatever this machine actually has.
  
@@ -47,17 +33,7 @@ def available_devices() -> list[str]:
         pass
     return devices
  
-# Get DepthEstimator for a model + settings, then load it if not already loaded.
- 
-def get_estimator(model: str, device: str, input_size: int) -> DepthEstimator:
-    path = DEPTH_ROOT / model
-    checkpoint = str(path) if path.exists() else model
-    key = (checkpoint, device, int(input_size))
-    if key not in _estimators:
-        _estimators[key] = DepthEstimator(checkpoint, device=device, input_size=int(input_size))
-    return _estimators[key]
- 
-# Shrink big photos before processing. The models shrink the image anyway, but everything after the model (depth convention, confidence, colouring, sending images to the browser) runs at the photo's full size: a 12 MP phone photo is ~4x slower than 1280 px for no visible gain.
+# Shrink big photos before processing. The model shrinks the image anyway, but everything after the model (depth convention, confidence, colouring, sending images to the browser) runs at the photo's full size: a 12 MP phone photo is ~4x slower than 1280 px for no visible gain.
 DEFAULT_MAX_SIDE = 1280
  
  
@@ -74,58 +50,7 @@ def limit_size(image: np.ndarray, max_side) -> tuple[np.ndarray, str]:
 def to_rgb(bgr: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
  
-# Run depth estimation using specific model. Check if image is None, then load the estimator and estimate the depth. Return the results as a tuple of (image, view), view, info, npy_path, and state.
- 
-def run(image, model, device, input_size, max_side=DEFAULT_MAX_SIDE):
-    if image is None:
-        return None, None, None, "Upload an image first.", None, None
-    image, shrunk = limit_size(image, max_side)
- 
-    try:
-        estimator = get_estimator(model, device, input_size)
-    except (FileNotFoundError, ValueError) as e:
-        return None, None, None, f"**Couldn't load the model.**\n\n```\n{e}\n```", None, None
- 
-# measure the time with perf_counter() to estimate the depth and store the result in a variable. Calculate the time taken in milliseconds and update the _runs dictionary with the number of runs for that model.
-    start = perf_counter()
-    result = estimator.estimate(image)
-    ms = (perf_counter() - start) * 1000
-    run_key = (model, device, int(input_size))
-    _runs[run_key] = _runs.get(run_key, 0) + 1
- 
-    view = to_rgb(colorize(result))
-    confidence_view = to_rgb(colorize_confidence(result))
- 
-    npy_path = Path(tempfile.mkdtemp()) / "depth.npy"
-    np.save(npy_path, result.depth)
- 
-    d = result.depth
-    if not result.valid.any():
-        meaning = "**no valid depth** in this image (e.g. a blank or black frame)"
-        rng = "–"
-    elif result.is_metric:
-        meaning = "**metres** from the camera (bigger = farther)"
-        rng = f"{np.nanmin(d):.2f} m – {np.nanmax(d):.2f} m (median {np.nanmedian(d):.2f} m)"
-    else:
-        meaning = ("**relative** 0–1 within this image (0 = nearest, 1 = farthest). "
-                   "Good for shape and ordering; not real distances. Use a metric checkpoint for metres.")
-        rng = f"{np.nanmin(d):.2f} – {np.nanmax(d):.2f} (median {np.nanmedian(d):.2f})"
-# info string with model name, kind, device, time taken, values meaning and range
-    info = (
-        f"**Model:** `{Path(model).name}` · {result.kind} · on **{estimator.device}** "
-        f"at input size **{estimator.input_size}**  \n"
-        f"{'**Repo code:** `' + str(estimator.repo_path) + '`  ' + chr(10) if getattr(estimator, 'repo_path', None) else ''}"
-        f"**Time:** {ms:.0f} ms for {image.shape[1]}×{image.shape[0]} px{shrunk}"
-        f"{'  (first run includes warm-up)' if _runs[run_key] == 1 else ''}  \n"
-        f"**Values:** {meaning}  \n"
-        f"**Range:** {rng}  \n"
-        f"**Valid pixels:** {result.valid_fraction * 100:.1f}% · "
-        f"**mean confidence:** {result.confidence.mean():.2f}"
-    )
-    state = {"depth": d, "confidence": result.confidence, "view": view, "metric": result.is_metric}
-    return (image, view), view, confidence_view, info, str(npy_path), state
- 
-# Read a point from the depth map when user clicks, retuns a marked image and text with value of that point
+# Read a point from the depth map when user clicks, returns a marked image and text with value of that point
  
 def read_point(state, evt: gr.SelectData):
     if not state:
@@ -143,23 +68,18 @@ def read_point(state, evt: gr.SelectData):
     cv2.circle(marked, (x, y), r + 3, (255, 255, 255), 2)
     cv2.circle(marked, (x, y), r, (0, 0, 0), -1)
  
-# If the depth values are in metric units, format the text to show the value in meters. Otherwise, format it as a relative value with three decimal places. Return the marked image and the formatted text.
     if window.size == 0:
         text = f"**({x}, {y}) → no valid depth here**"
-    elif state["metric"]:
-        text = f"**({x}, {y}) → {float(np.median(window)):.2f} m** from the camera · confidence {confidence:.2f}"
     else:
-        text = (f"**({x}, {y}) → {float(np.median(window)):.3f}** (relative 0–1; bigger = farther) "
-                f"· confidence {confidence:.2f}")
+        text = f"**({x}, {y}) → {float(np.median(window)):.2f} m** from the camera · confidence {confidence:.2f}"
     return marked, text
  
-# Depth Anything VS YOLO depth comparison. The YOLO depth models are listed in the YOLO_DEPTH_MODELS variable, and the get_yolo_depth function loads a YOLO depth model once and caches it for reuse. The run_compare function runs both Depth Anything and YOLO depth on the same image, compares their outputs, and returns the results along with performance statistics.
+# YOLO depth. Only n is in models/; s and m download there when first picked. get_yolo_depth loads a model once and caches it for reuse.
  
 YOLO_DEPTH_MODELS = ["yolo26n-depth.pt", "yolo26s-depth.pt", "yolo26m-depth.pt"]   # n = fastest
 _yolo_depths: dict[tuple, object] = {}   # loaded once per (model, device, imgsz), then reused
  
  
-# Load a YOLO depth model once. Weights download into models/ on first use (git-ignored).
 def get_yolo_depth(name: str, device: str, imgsz: int):
     from src import YoloDepthEstimator
     key = (name, device, int(imgsz))
@@ -175,7 +95,7 @@ def import_error_message(e: ImportError) -> str:
             "`YoloDepthEstimator` or `yolo_depth`: the updated `src` files aren't in this folder.")
  
  
-# Run YOLO depth ONLY (no Depth Anything), so its time is all you wait for. Same outputs as the first tab: slider, depth map (click to read metres), confidence, .npy, info.
+# Run YOLO depth: slider, depth map (click to read metres), confidence, .npy, info.
 def run_yolo(image, yolo_name, device, yolo_imgsz, max_side=DEFAULT_MAX_SIDE):
     if image is None:
         return None, None, None, "Upload an image first.", None, None
@@ -212,52 +132,67 @@ def run_yolo(image, yolo_name, device, yolo_imgsz, max_side=DEFAULT_MAX_SIDE):
         f"**Valid pixels:** {result.valid_fraction * 100:.1f}% · "
         f"**mean confidence:** {result.confidence.mean():.2f}"
     )
-    state = {"depth": d, "confidence": result.confidence, "view": view, "metric": True}
+    state = {"depth": d, "confidence": result.confidence, "view": view}
     return (image, view), view, confidence_view, info, str(npy_path), state
  
  
-# Run Depth Anything and YOLO depth on the same image. Both depth maps are shown on the same colour scale (metres; Depth Anything's relative output is scaled to YOLO's metres for display), plus where they disagree and how fast each was.
-def run_compare(image, model, device, input_size, yolo_name, yolo_imgsz, max_side=DEFAULT_MAX_SIDE):
-    nothing = (None, None, None, None)
+# Pose + depth: MediaPipe Lite finds the body joints, YOLO depth says how far each one is.
+POSE_MODEL = POSE_ROOT / "models" / "pose_landmarker_lite.task"
+_pose_estimators: dict[str, object] = {}
+ 
+ 
+def get_pose_estimator(model_path: str):
+    from pose_estimator import PoseEstimator         # needs mediapipe
+    if model_path not in _pose_estimators:
+        _pose_estimators[model_path] = PoseEstimator(model_path)
+    return _pose_estimators[model_path]
+ 
+ 
+def run_pose_depth(image, yolo_name, device, yolo_imgsz, max_side=DEFAULT_MAX_SIDE):
+    nothing = (None, None, None)
     if image is None:
         return *nothing, "Upload an image first."
     image, shrunk = limit_size(image, max_side)
  
     try:
-        depth_anything = get_estimator(model, device, input_size)
-    except (FileNotFoundError, ValueError) as e:
-        return *nothing, f"**Couldn't load Depth Anything.**\n\n```\n{e}\n```"
- 
+        pose_est = get_pose_estimator(str(POSE_MODEL))
+    except ImportError as e:
+        return *nothing, f"**Couldn't import the pose estimator.**\n\n```\n{e}\n```\n\n`pip install mediapipe`"
+    except FileNotFoundError:
+        return *nothing, (f"**Pose model missing.** Download `pose_landmarker_lite.task` from the MediaPipe "
+                          f"Pose Landmarker page and put it in:\n\n`{POSE_MODEL.parent}`")
     try:
-        yolo = get_yolo_depth(yolo_name, depth_anything.device, yolo_imgsz)
+        depth_est = get_yolo_depth(yolo_name, device, yolo_imgsz)
     except ImportError as e:
         return *nothing, import_error_message(e)
-    except Exception as e:  # not a depth model, failed download, ...
+    except Exception as e:
         return *nothing, f"**Couldn't load YOLO depth.**\n\n```\n{e}\n```"
  
-    import torch
-    sync = torch.cuda.synchronize if depth_anything.device.startswith("cuda") else (lambda: None)
-    panels, stats = compare_panels(image, depth_anything, yolo, sync)
+    frame = {"frame_id": 0, "source_id": "gradio-upload", "capture_timestamp_ns": 0}
+    image = np.ascontiguousarray(image)
+    t0 = perf_counter()
+    pose = pose_est.estimate_frame(image, **frame)
+    t1 = perf_counter()
+    depth = depth_est.estimate_frame(image, **frame)
+    t2 = perf_counter()
+    result = fuse_pose_depth(pose, depth)
  
-    da_ms, yolo_ms = stats["depth_anything_ms"], stats["yolo_ms"]
-    faster, ratio = ("YOLO depth", da_ms / yolo_ms) if yolo_ms < da_ms else ("Depth Anything", yolo_ms / da_ms)
-    near, far = stats["colour_range_m"]
-    lo, hi = stats["yolo_range_m"]
-    scaled = ("" if stats["depth_anything_kind"] == "metric_depth" else
-              "  \nDepth Anything's output is relative (no units), so for display its overall scale was "
-              "fitted to YOLO's metres. Its *shape* is unchanged; the ordering number needs no fitting.")
+    bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    on_photo = to_rgb(draw_pose_depth(bgr, result))
+    on_depth = to_rgb(draw_pose_depth(colorize(result.depth), result))
+    if result.detected:
+        found = sum(row[5] is not None for row in joint_table(result))
+        person = (f"**Person:** about **{result.body_depth:.2f} m** away (torso median) · "
+                  f"{found}/{len(result.joint_depth)} joints have a depth")
+    else:
+        person = "**No person detected.**"
     info = (
-        f"**Depth Anything V2:** {da_ms:.0f} ms · **YOLO depth ({Path(yolo_name).stem}):** {yolo_ms:.0f} ms "
-        f"· on **{depth_anything.device}** → **{faster} is {ratio:.1f}× faster** "
-        f"· {image.shape[1]}×{image.shape[0]} px{shrunk}  \n"
-        f"**Near/far ordering agrees:** {stats['ordering_agreement'] * 100:.0f}% of pixel pairs  \n"
-        f"**Median disagreement** (after matching scale): {stats['median_disagreement'] * 100:.0f}%  \n"
-        f"**YOLO depth range:** {lo:.1f}–{hi:.1f} m · colours: red {near:.1f} m → blue {far:.1f} m"
-        + scaled
+        f"**Pose:** {(t1 - t0) * 1000:.0f} ms · **Depth** ({Path(depth_est.model_name).name}): "
+        f"{(t2 - t1) * 1000:.0f} ms · {image.shape[1]}×{image.shape[0]} px{shrunk}  \n"
+        + person + "  \n"
+        + "Depths are **metres** from the camera."
     )
-    slider = (to_rgb(panels["depth_anything"]), to_rgb(panels["yolo"]))
-    return (slider, to_rgb(panels["depth_anything"]), to_rgb(panels["yolo"]),
-            to_rgb(panels["difference"]), info)
+    return on_photo, on_depth, joint_table(result), info
  
  
 # Create a custom theme with white background for the Gradio interface
@@ -268,7 +203,6 @@ theme = gr.themes.Default(
     body_background_fill="#ffffff",
     block_background_fill="#ffffff",
 )
-# Demonstration interface using gradio via Blocks similar to div in HTML, with a title and description, and a row with two columns: one for input and controls, and one for output and results.
  
 # Gradio 6 moved `theme` from gr.Blocks(...) to demo.launch(...); support both.
 GRADIO_6 = int(gr.__version__.split(".")[0]) >= 6
@@ -277,44 +211,14 @@ theme_in_launch = {"theme": theme} if GRADIO_6 else {}
  
 with gr.Blocks(title="Depth Estimator", **theme_in_blocks) as demo:
     gr.Markdown(
-        "# Depth Anything V2: depth estimator\n"
+        "# Depth estimator\n"
         "Upload a photo in .jpg or .png format. "
     )
     max_side = gr.Slider(0, 4096, value=DEFAULT_MAX_SIDE, step=64,
                          label="Max image side (px): bigger photos are shrunk to this first. "
                                "Lower = faster; 0 = never shrink")
+
     with gr.Tabs():
-        with gr.Tab("Depth estimator"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    image_in = gr.Image(label="Input image", type="numpy", image_mode="RGB",
-                                        sources=["upload", "clipboard", "webcam"])
-                    models = available_models()
-                    model = gr.Dropdown(models, value=models[0], label="Model (.pth files in models/)",
-                                        allow_custom_value=True)
-                    with gr.Row():
-                        device = gr.Dropdown(available_devices(), value="auto", label="Device")
-                        input_size = gr.Slider(252, 1022, value=DEFAULT_INPUT_SIZE, step=14,
-                                               label="Model input size (lower = faster)")
-                    go = gr.Button("Estimate depth", variant="primary")
-                    info = gr.Markdown()
-                    npy = gr.File(label="Depth (.npy, float32, NaN = invalid)")
-                with gr.Column(scale=2):
-                    compare = gr.ImageSlider(label="Drag: image ↔ depth", max_height=520)
-                    with gr.Row():
-                        depth_view = gr.Image(label="Depth map (click to read a value)", interactive=False)
-                        confidence_view = gr.Image(label="Confidence (white = trusted, dark = edges/invalid)",
-                                                   interactive=False)
-                    point = gr.Markdown()
-        # Set up state, outputs, and event handlers for the Gradio interface. The state is used to store the depth map and other relevant information, while the outputs are the results of the depth estimation process. The event handlers are set up to trigger the run function when the user clicks the "Estimate depth" button, uploads an image
- 
-            state = gr.State()
-            inputs = [image_in, model, device, input_size, max_side]
-            outputs = [compare, depth_view, confidence_view, info, npy, state]
-            go.click(run, inputs, outputs)
-            image_in.upload(run, inputs, outputs)
-            depth_view.select(read_point, state, [depth_view, point])
- 
         with gr.Tab("YOLO depth"):
             with gr.Row():
                 with gr.Column(scale=1):
@@ -344,6 +248,28 @@ with gr.Blocks(title="Depth Estimator", **theme_in_blocks) as demo:
             yo_image.upload(run_yolo, yo_inputs, yo_outputs)
             yo_depth_view.select(read_point, yo_state, [yo_depth_view, yo_point])
  
-if __name__ == "__main__":
-    demo.launch(server_port=7861, inbrowser=True, **theme_in_launch)
+        with gr.Tab("Pose + depth"):
+            with gr.Row():
+                with gr.Column(scale=1):
+                    pd_image = gr.Image(label="Input image", type="numpy", image_mode="RGB",
+                                        sources=["upload", "clipboard", "webcam"])
+                    pd_yolo = gr.Dropdown(YOLO_DEPTH_MODELS, value=YOLO_DEPTH_MODELS[0], allow_custom_value=True,
+                                          label="YOLO depth model")
+                    pd_device = gr.Dropdown(available_devices(), value="auto", label="Device")
+                    pd_imgsz = gr.Slider(256, 1024, value=DEFAULT_YOLO_IMGSZ, step=32, label="YOLO input size (lower = faster)")
+                    pd_go = gr.Button("Estimate pose + depth", variant="primary")
+                    pd_info = gr.Markdown()
+                with gr.Column(scale=2):
+                    with gr.Row():
+                        pd_photo = gr.Image(label="Skeleton + distances", interactive=False)
+                        pd_depth = gr.Image(label="Skeleton on the depth map", interactive=False)
+                    pd_table = gr.Dataframe(headers=["#", "joint", "x px", "y px", "visibility", "depth (m)"],
+                                            label="Every joint", interactive=False, wrap=True)
  
+            pd_inputs = [pd_image, pd_yolo, pd_device, pd_imgsz, max_side]
+            pd_outputs = [pd_photo, pd_depth, pd_table, pd_info]
+            pd_go.click(run_pose_depth, pd_inputs, pd_outputs)
+            pd_image.upload(run_pose_depth, pd_inputs, pd_outputs)
+ 
+if __name__ == "__main__":
+    demo.launch(inbrowser=True, **theme_in_launch)   # first free port from 7860 up

@@ -5,13 +5,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# Make `depth_estimator` importable when running this file directly
+# Make `src` importable when running this file directly
 # (remove if the package is installed / on PYTHONPATH like pose_estimator).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from depth_estimator import DepthEstimator
-from depth_estimator.cli import add_estimator_arguments, describe_values, estimator_kwargs
-from depth_estimator.utils import colorize
+from src import DEFAULT_YOLO_DEPTH, DEFAULT_YOLO_IMGSZ, YoloDepthEstimator
+from src.utils import colorize
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -37,7 +36,9 @@ OUTPUT_PATH = (
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    add_estimator_arguments(parser)
+    parser.add_argument("--yolo-model", default=DEFAULT_YOLO_DEPTH, help="yolo26n-depth.pt (fastest), s, m")
+    parser.add_argument("--imgsz", type=int, default=DEFAULT_YOLO_IMGSZ, help="YOLO input size (lower = faster)")
+    parser.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, mps")
     parser.add_argument("--image", default=str(IMAGE_PATH))
     parser.add_argument("--no-show", action="store_true",
                         help="don't open a window (just save the PNG)")
@@ -61,24 +62,22 @@ def main() -> None:
             f"Use a .jpg or .png (HEIC/iPhone photos and some .webp files won't load)."
         )
 
-    # OpenCV loads images as BGR.Depth Anything (like MediaPipe) expects RGB.
+    # OpenCV loads images as BGR. YOLO depth (like MediaPipe) is given RGB.
     image_rgb = cv2.cvtColor(
         image_bgr,
         cv2.COLOR_BGR2RGB,
     )
 
-    print(f"Loading {args.model} ...")
+    print(f"Loading {args.yolo_model} ...")
 
-    with DepthEstimator(**estimator_kwargs(args)) as estimator:
-        if getattr(estimator, "repo_path", None):
-            print(f"Repo code: {estimator.repo_path}")
-        print(f"Device: {estimator.device}, input size: {estimator.input_size}")
+    with YoloDepthEstimator(args.yolo_model, device=args.device, imgsz=args.imgsz) as estimator:
+        print(f"Device: {estimator.device}, input size: {estimator.imgsz}")
         result = estimator.estimate(image_rgb)
 
     depth = result.depth
-    unit = "m" if result.is_metric else ""
+    unit = "m"
 
-    print(f"Kind: {result.kind}  ->  {describe_values(result.kind)}")
+    print(f"Kind: {result.kind}  ->  metres from the camera (bigger = farther)")
     print(f"Shape: {depth.shape}  (input was {image_rgb.shape[:2]})")
     print(f"Valid pixels: {result.valid_fraction * 100:.1f}%")
     print(f"Min: {np.nanmin(depth):.3f} {unit}")
@@ -92,7 +91,7 @@ def main() -> None:
     print(f"Saved: {OUTPUT_PATH}")
 # implement a check to see if the user has requested to show the output image. If the --no-show flag is not set, the script will display the side-by-side comparison of the original image and the depth map in a window. The user can close the window by pressing any key, and the script will then clean up by destroying all OpenCV windows.
     if not args.no_show:
-        cv2.imshow("Depth Anything V2 Prototype", side_by_side)
+        cv2.imshow("YOLO depth", side_by_side)
         print("Press any key in the image window to close.")
         cv2.waitKey(0)
         cv2.destroyAllWindows()

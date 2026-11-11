@@ -1,9 +1,3 @@
-"""This file is to run depth estimation on a folder of images. 
-It takes an input folder containing images, processes each image to estimate depth, and saves the results in an output folder. 
-The script also provides options to specify the model to use for depth estimation and whether to save the depth maps as .npy files in addition to the PNG images.
-Without this script, the user would have to manually run depth estimation on each image one by one, which can be time-consuming and inefficient.
-"""
-
 import argparse
 import sys
 from pathlib import Path
@@ -14,9 +8,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from depth_estimator import DepthEstimator
-from depth_estimator.cli import add_estimator_arguments, describe_values, estimator_kwargs
-from depth_estimator.utils import colorize
+from src import DEFAULT_YOLO_DEPTH, DEFAULT_YOLO_IMGSZ, YoloDepthEstimator
+from src.utils import colorize
 
 
 DEPTH_ROOT = Path(__file__).resolve().parents[1]
@@ -36,9 +29,11 @@ def write_image(path: Path, image) -> None:
 # Parse command-line arguments to get the input folder, output folder, model path, and whether to save .npy files. The main function is responsible for loading the images from the input folder, initializing the depth estimator, processing each image to estimate depth, and saving the results in the output folder. It also prints summary statistics about the processing time and any skipped images.
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default=str(DEPTH_ROOT / "test_images"))
+    parser.add_argument("--input", default=str(DEPTH_ROOT / "test_images"), help="folder of .jpg/.png images")
     parser.add_argument("--output", default=str(DEPTH_ROOT / "test_outputs"))
-    add_estimator_arguments(parser)
+    parser.add_argument("--yolo-model", default=DEFAULT_YOLO_DEPTH, help="yolo26n-depth.pt (fastest), s, m")
+    parser.add_argument("--imgsz", type=int, default=DEFAULT_YOLO_IMGSZ, help="YOLO input size (lower = faster)")
+    parser.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, mps")
     parser.add_argument("--no-npy", action="store_true", help="only save the PNGs")
     args = parser.parse_args()
 
@@ -58,14 +53,12 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading {args.model} ...")
+    print(f"Loading {args.yolo_model} ...")
     times, skipped = [], []
-# checks if the model can be loaded, and if not, it prints an error message and exits the script. If the model is loaded successfully, it prints the repository path (if available), the device being used for inference, and the output type of the depth estimator. It also prints the total number of images to be processed from the input directory.
-    with DepthEstimator(**estimator_kwargs(args)) as estimator:
-        if getattr(estimator, "repo_path", None):
-            print(f"Repo code: {estimator.repo_path}")
-        print(f"Device: {estimator.device}, input size: {estimator.input_size}")
-        print(f"Output: {estimator.kind} -> {describe_values(estimator.kind)}")
+# Load the model once, print the device and input size, It also prints the total number of images to be processed from the input directory.
+    with YoloDepthEstimator(args.yolo_model, device=args.device, imgsz=args.imgsz) as estimator:
+        print(f"Device: {estimator.device}, input size: {estimator.imgsz}")
+        print("Output: metres from the camera (bigger = farther), NaN = invalid")
         print(f"Processing {len(images)} images from {input_dir}\n")
 
         for i, path in enumerate(images, 1):
@@ -89,7 +82,7 @@ def main() -> None:
 
             d = result.depth
             print(f"[{i}/{len(images)}] {path.name}  {image_bgr.shape[1]}x{image_bgr.shape[0]}  "
-                  f"{ms:.0f} ms  range {np.nanmin(d):.2f}..{np.nanmax(d):.2f}  "
+                  f"{ms:.0f} ms  range {np.nanmin(d):.2f}..{np.nanmax(d):.2f} m  "
                   f"valid {result.valid_fraction * 100:.0f}%")
 
     print()

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from depth_estimator import edge_confidence, normalize_prediction
+from src import edge_confidence, normalize_prediction
 
 
 def ramp_disparity(h=40, w=60):

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from depth_estimator import DepthEstimation, DepthFrameResult
+from src import DepthEstimation, DepthFrameResult
 
 
 def make(depth, kind="metric_depth", valid=None, confidence=None, disparity=None):

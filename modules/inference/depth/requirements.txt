@@ -1,9 +1,9 @@
 torch
 torchvision
-opencv-python
+opencv-contrib-python   # same OpenCV as the pose module; don't also install opencv-python
 numpy
+ultralytics             # YOLO depth
 # optional
-gradio      # app.py
-pytest      # tests/
-mediapipe   # scripts/test_pose_depth_video.py
-ultralytics # YOLO depth (yolo_depth.py, benchmark, comparison tab)
+gradio                  # app.py
+pytest                  # tests/
+mediapipe               # Pose + depth tab, scripts/test_pose_depth_image.py (pose module's dependency)

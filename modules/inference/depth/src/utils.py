@@ -1,9 +1,13 @@
 """Helpers for viewing depth and combining it with pose landmarks."""
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 from .contracts import DepthEstimation
+
+DEPTH_ROOT = Path(__file__).resolve().parents[1]     # .../modules/inference/depth
+MODELS_DIR = DEPTH_ROOT / "models"                    # yolo26n-depth.pt lives here
 
 
 # colorize is for displaying depth maps as BGR images, where near objects are red/yellow and far objects are blue. Invalid pixels (NaN) are drawn black. It returns a BGR image suitable for display with cv2.imshow.
@@ -70,22 +74,37 @@ def sample_depth(
     return float(np.median(window)) if window.size else float("nan")
 
 
-def temporal_flicker(
-    previous: DepthEstimation,
-    current: DepthEstimation,
-) -> float:
-    """Median relative change between two consecutive frames' depth.
+def resolve_device(device: str | None) -> str:
+    """'auto'/None -> best available. Otherwise checks the requested device exists."""
 
-    Only pixels valid in both frames count. On a static camera and scene this
-    should be close to 0. High values mean depth "breathes" frame to frame,
-    which shows up as jitter in splats.
-    """
+    import torch
 
-    both = previous.valid & current.valid
-    if not both.any():
-        return float("nan")
+    if device in (None, "", "auto"):
+        if torch.cuda.is_available():
+            return "cuda"
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
 
-    a, b = previous.depth[both], current.depth[both]
-    # relative depth reaches 0 at the nearest pixel, so compare against the frame's range
-    scale = np.maximum(np.abs(a), 0.05 if not previous.is_metric else 1e-6)
-    return float(np.median(np.abs(b - a) / scale))
+    device = str(device).lower()
+
+    if device == "cpu":
+        return device
+
+    if device.startswith("cuda"):
+        if not torch.cuda.is_available():
+            raise ValueError(
+                "device='cuda' requested but PyTorch can't see a CUDA GPU. Install the CUDA build "
+                "of torch from pytorch.org, or use device='cpu'."
+            )
+        index = int(device.split(":")[1]) if ":" in device else 0
+        if index >= torch.cuda.device_count():
+            raise ValueError(f"device='{device}' requested but only {torch.cuda.device_count()} GPU(s) found")
+        return device
+
+    if device == "mps":
+        if not (getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()):
+            raise ValueError("device='mps' requested but Apple Metal isn't available on this machine")
+        return device
+
+    raise ValueError(f"unknown device '{device}' (use 'auto', 'cpu', 'cuda', 'cuda:N' or 'mps')")
