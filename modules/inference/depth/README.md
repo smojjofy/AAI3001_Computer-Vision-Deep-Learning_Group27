@@ -4,7 +4,7 @@
  
 All commands: run from `modules\inference\depth`, with the venv active.
  
-## 0. Every time you open a terminal
+## Startup
  
 ```powershell
 cd C:\Users\User\Github-Projects\AAI3001_Computer-Vision-Deep-Learning_Group27
