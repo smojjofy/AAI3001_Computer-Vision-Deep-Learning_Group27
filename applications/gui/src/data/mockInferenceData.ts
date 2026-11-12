@@ -89,12 +89,6 @@ function createSegmentationOutput(
   context.font =
     '600 20px system-ui'
 
-  context.fillText(
-    'Foreground Mask',
-    32,
-    50
-  )
-
   return canvas
 }
 
@@ -167,24 +161,7 @@ function createDepthOutput(
   context.fillStyle =
     'rgba(0, 0, 0, 0.65)'
 
-  context.fillRect(
-    18,
-    18,
-    190,
-    50
-  )
-
-  context.fillStyle = '#ffffff'
-
-  context.font =
-    '600 20px system-ui'
-
-  context.fillText(
-    'Depth Output',
-    32,
-    50
-  )
-
+  
   return canvas
 }
 
@@ -302,11 +279,6 @@ function createFlowOutput(
   context.font =
     '600 20px system-ui'
 
-  context.fillText(
-    'Motion / Optical Flow',
-    32,
-    50
-  )
 
   return canvas
 }
@@ -349,84 +321,65 @@ export function createMockInferenceData(
       detected: true,
 
       landmarks: [
-        {
-          x: 0.50,
-          y: 0.18,
-          z: 0,
-          visibility: 0.99,
-          presence: 0.99,
-        },
-        {
-          x: 0.44,
-          y: 0.32,
-          z: 0,
-          visibility: 0.98,
-          presence: 0.99,
-        },
-        {
-          x: 0.56,
-          y: 0.32,
-          z: 0,
-          visibility: 0.98,
-          presence: 0.99,
-        },
-        {
-          x: 0.40,
-          y: 0.52,
-          z: 0,
-          visibility: 0.95,
-          presence: 0.98,
-        },
-        {
-          x: 0.60,
-          y: 0.52,
-          z: 0,
-          visibility: 0.95,
-          presence: 0.98,
-        },
-        {
-          x: 0.45,
-          y: 0.65,
-          z: 0,
-          visibility: 0.96,
-          presence: 0.98,
-        },
-        {
-          x: 0.55,
-          y: 0.65,
-          z: 0,
-          visibility: 0.96,
-          presence: 0.98,
-        },
-        {
-          x: 0.44,
-          y: 0.88,
-          z: 0,
-          visibility: 0.94,
-          presence: 0.97,
-        },
-        {
-          x: 0.56,
-          y: 0.88,
-          z: 0,
-          visibility: 0.94,
-          presence: 0.97,
-        },
+        { x: 0.50, y: 0.12, z: 0, visibility: 0.99, presence: 0.99 }, // 0 nose
+        { x: 0.485, y: 0.105, z: 0, visibility: 0.99, presence: 0.99 }, // 1
+        { x: 0.475, y: 0.105, z: 0, visibility: 0.99, presence: 0.99 }, // 2
+        { x: 0.465, y: 0.11, z: 0, visibility: 0.99, presence: 0.99 }, // 3
+        { x: 0.515, y: 0.105, z: 0, visibility: 0.99, presence: 0.99 }, // 4
+        { x: 0.525, y: 0.105, z: 0, visibility: 0.99, presence: 0.99 }, // 5
+        { x: 0.535, y: 0.11, z: 0, visibility: 0.99, presence: 0.99 }, // 6
+        { x: 0.445, y: 0.13, z: 0, visibility: 0.98, presence: 0.99 }, // 7
+        { x: 0.555, y: 0.13, z: 0, visibility: 0.98, presence: 0.99 }, // 8
+        { x: 0.485, y: 0.145, z: 0, visibility: 0.99, presence: 0.99 }, // 9
+        { x: 0.515, y: 0.145, z: 0, visibility: 0.99, presence: 0.99 }, // 10
+
+        { x: 0.42, y: 0.28, z: 0, visibility: 0.99, presence: 0.99 }, // 11 L shoulder
+        { x: 0.58, y: 0.28, z: 0, visibility: 0.99, presence: 0.99 }, // 12 R shoulder
+
+        { x: 0.36, y: 0.43, z: 0, visibility: 0.98, presence: 0.99 }, // 13 L elbow
+        { x: 0.64, y: 0.43, z: 0, visibility: 0.98, presence: 0.99 }, // 14 R elbow
+
+        { x: 0.31, y: 0.57, z: 0, visibility: 0.97, presence: 0.98 }, // 15 L wrist
+        { x: 0.69, y: 0.57, z: 0, visibility: 0.97, presence: 0.98 }, // 16 R wrist
+
+        { x: 0.285, y: 0.595, z: 0, visibility: 0.95, presence: 0.97 }, // 17
+        { x: 0.715, y: 0.595, z: 0, visibility: 0.95, presence: 0.97 }, // 18
+        { x: 0.275, y: 0.575, z: 0, visibility: 0.95, presence: 0.97 }, // 19
+        { x: 0.725, y: 0.575, z: 0, visibility: 0.95, presence: 0.97 }, // 20
+        { x: 0.295, y: 0.555, z: 0, visibility: 0.95, presence: 0.97 }, // 21
+        { x: 0.705, y: 0.555, z: 0, visibility: 0.95, presence: 0.97 }, // 22
+
+        { x: 0.45, y: 0.55, z: 0, visibility: 0.99, presence: 0.99 }, // 23 L hip
+        { x: 0.55, y: 0.55, z: 0, visibility: 0.99, presence: 0.99 }, // 24 R hip
+
+        { x: 0.44, y: 0.72, z: 0, visibility: 0.98, presence: 0.99 }, // 25 L knee
+        { x: 0.56, y: 0.72, z: 0, visibility: 0.98, presence: 0.99 }, // 26 R knee
+
+        { x: 0.43, y: 0.88, z: 0, visibility: 0.97, presence: 0.98 }, // 27 L ankle
+        { x: 0.57, y: 0.88, z: 0, visibility: 0.97, presence: 0.98 }, // 28 R ankle
+
+        { x: 0.42, y: 0.91, z: 0, visibility: 0.96, presence: 0.98 }, // 29
+        { x: 0.58, y: 0.91, z: 0, visibility: 0.96, presence: 0.98 }, // 30
+
+        { x: 0.455, y: 0.94, z: 0, visibility: 0.96, presence: 0.98 }, // 31
+        { x: 0.545, y: 0.94, z: 0, visibility: 0.96, presence: 0.98 }, // 32
       ],
 
       jointDepth: [
-        1.82,
-        1.86,
-        1.85,
-        1.91,
-        1.90,
-        1.95,
-        1.94,
-        2.03,
-        2.02,
+        1.82, 1.82, 1.82, 1.82, 1.82, 1.82, 1.82,
+        1.83, 1.83, 1.83, 1.83,
+        1.88, 1.88,
+        1.90, 1.90,
+        1.92, 1.92,
+        1.93, 1.93, 1.93, 1.93, 1.93, 1.93,
+        1.91, 1.91,
+        1.96, 1.96,
+        2.01, 2.01,
+        2.03, 2.03,
+        2.04, 2.04,
       ],
 
-      bodyDepth: 1.92,
+      bodyDepth: 1.90,
 
       depthImage:
         createDepthOutput(

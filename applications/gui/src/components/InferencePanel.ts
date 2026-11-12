@@ -18,6 +18,70 @@ const VIEW_NAMES: Record<
   flow: 'Optical Flow',
 }
 
+const POSE_CONNECTIONS: Array<
+  [number, number]
+> = [
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [3, 7],
+
+  [0, 4],
+  [4, 5],
+  [5, 6],
+  [6, 8],
+
+  [9, 10],
+
+  [11, 12],
+
+  [11, 13],
+  [13, 15],
+  [15, 17],
+  [15, 19],
+  [15, 21],
+  [17, 19],
+
+  [12, 14],
+  [14, 16],
+  [16, 18],
+  [16, 20],
+  [16, 22],
+  [18, 20],
+
+  [11, 23],
+  [12, 24],
+  [23, 24],
+
+  [23, 25],
+  [24, 26],
+
+  [25, 27],
+  [26, 28],
+
+  [27, 29],
+  [28, 30],
+
+  [29, 31],
+  [30, 32],
+
+  [27, 31],
+  [28, 32],
+]
+
+const LABELLED_JOINTS: Record<
+  number,
+  string
+> = {
+  0: 'Nose',
+  15: 'L wrist',
+  16: 'R wrist',
+  25: 'L knee',
+  26: 'R knee',
+  27: 'L ankle',
+  28: 'R ankle',
+}
+
 export class InferencePanel {
   private element: HTMLElement
 
@@ -227,17 +291,11 @@ export class InferencePanel {
         break
 
       case 'segmentation':
-        this.renderImage(
-          this.currentData.segmentation?.image,
-          this.currentData.segmentation?.processingMs
-        )
+        this.renderSegmentation()
         break
 
       case 'flow':
-        this.renderImage(
-          this.currentData.flow?.image,
-          this.currentData.flow?.processingMs
-        )
+        this.renderFlow()
         break
     }
   }
@@ -350,30 +408,10 @@ export class InferencePanel {
     const landmarks =
       pose.landmarks
 
-    /*
-     * Mock-fixture skeleton connections.
-     * These indices correspond only to the
-     * simplified mock landmark set.
-     */
-    const connections: Array<
-      [number, number]
-    > = [
-      [0, 1],
-      [0, 2],
-      [1, 2],
-      [1, 3],
-      [2, 4],
-      [1, 5],
-      [2, 6],
-      [5, 6],
-      [5, 7],
-      [6, 8],
-    ]
-
     context.strokeStyle = '#22d3ee'
     context.lineWidth = 4
 
-    connections.forEach(
+    POSE_CONNECTIONS.forEach(
       ([startIndex, endIndex]) => {
         const start =
           landmarks[startIndex]
@@ -401,25 +439,82 @@ export class InferencePanel {
       }
     )
 
-    context.fillStyle = '#f59e0b'
+   landmarks.forEach(
+    (landmark, index) => {
+      const x =
+        landmark.x *
+        this.canvas.width
 
-    landmarks.forEach(
-      (landmark) => {
-        context.beginPath()
+      const y =
+        landmark.y *
+        this.canvas.height
 
-        context.arc(
-          landmark.x *
-            this.canvas.width,
-          landmark.y *
-            this.canvas.height,
-          6,
-          0,
-          Math.PI * 2
+      const depth =
+        pose.jointDepth[index]
+
+      const hasDepth =
+        depth !== null &&
+        depth !== undefined &&
+        Number.isFinite(depth)
+
+      context.fillStyle =
+        hasDepth
+          ? '#f59e0b'
+          : '#6b7280'
+
+      context.beginPath()
+
+      const landmarkRadius =
+        index <= 10
+          ? 3
+          : 5
+
+      context.arc(
+        x,
+        y,
+        landmarkRadius,
+        0,
+        Math.PI * 2
+      )
+
+      context.fill()
+
+      const label =
+        LABELLED_JOINTS[index]
+
+      if (
+        label &&
+        hasDepth
+      ) {
+        const unit =
+          pose.depthKind === 'metric_depth'
+            ? ' m'
+            : ''
+
+        context.fillStyle =
+          '#ffffff'
+
+        context.font =
+          '12px system-ui'
+
+        const labelX =
+          index === 0
+            ? x + 14
+            : x + 8
+
+        const labelY =
+          index === 0
+            ? y - 14
+            : y - 6
+
+        context.fillText(
+          `${label} ${depth.toFixed(2)}${unit}`,
+          labelX,
+          labelY
         )
-
-        context.fill()
       }
-    )
+    }
+  )
 
     context.fillStyle =
       'rgba(0, 0, 0, 0.65)'
@@ -437,9 +532,47 @@ export class InferencePanel {
       '600 20px system-ui'
 
     context.fillText(
-      'Pose Output',
+      'Pose + Depth',
       32,
-      50
+      48
+    )
+
+    context.font =
+      '13px system-ui'
+
+    const depthUnit =
+      pose.depthKind === 'metric_depth'
+        ? ' m'
+        : ''
+
+    const bodyDepthText =
+      pose.bodyDepth !== null &&
+      pose.bodyDepth !== undefined &&
+      Number.isFinite(pose.bodyDepth)
+        ? `${pose.bodyDepth.toFixed(2)}${depthUnit}`
+        : '--'
+
+    context.fillText(
+      `Body depth: ${bodyDepthText}`,
+      32,
+      70
+    )
+
+    context.fillText(
+      `Depth source: ${pose.depthSource ?? '--'}`,
+      32,
+      90
+    )
+
+    const totalMs =
+      pose.timingsMs?.total
+
+    context.fillText(
+      totalMs !== undefined
+        ? `Total: ${totalMs.toFixed(1)} ms`
+        : 'Total: -- ms',
+      32,
+      110
     )
 
     this.showCanvas()
@@ -449,28 +582,28 @@ export class InferencePanel {
     )
   }
 
- private renderDepth(): void {
+private renderFlow(): void {
   if (!this.currentData) {
     this.showPlaceholder(
-      'Depth output unavailable'
+      'Optical Flow output unavailable'
     )
 
     return
   }
 
-  const poseDepth =
-    this.currentData.poseDepth
+  const flow =
+    this.currentData.flow
 
-  if (!poseDepth || !poseDepth.depthImage) {
+  if (
+    !flow ||
+    !flow.image
+  ) {
     this.showPlaceholder(
-      'Depth output unavailable'
+      'Optical Flow output unavailable'
     )
 
     return
   }
-
-  const depthImage =
-    poseDepth.depthImage
 
   const context =
     this.canvas.getContext('2d')
@@ -495,7 +628,7 @@ export class InferencePanel {
   )
 
   context.drawImage(
-    depthImage,
+    flow.image,
     0,
     0,
     this.canvas.width,
@@ -503,13 +636,206 @@ export class InferencePanel {
   )
 
   context.fillStyle =
-    'rgba(0, 0, 0, 0.65)'
+    'rgba(0, 0, 0, 0.72)'
 
   context.fillRect(
     18,
     18,
-    220,
-    50
+    230,
+    70
+  )
+
+  context.fillStyle = '#ffffff'
+
+  context.font =
+    '600 20px system-ui'
+
+  context.fillText(
+    'Optical Flow',
+    32,
+    48
+  )
+
+  context.font =
+    '13px system-ui'
+
+  const processingMs =
+    flow.processingMs
+
+  context.fillText(
+    processingMs !== undefined
+      ? `Processing: ${processingMs.toFixed(1)} ms`
+      : 'Processing: -- ms',
+    32,
+    70
+  )
+
+  this.showCanvas()
+
+  this.setProcessingTime(
+    processingMs
+  )
+}
+
+private renderSegmentation(): void {
+  if (!this.currentData) {
+    this.showPlaceholder(
+      'Segmentation output unavailable'
+    )
+
+    return
+  }
+
+  const segmentation =
+    this.currentData.segmentation
+
+  if (
+    !segmentation ||
+    !segmentation.image
+  ) {
+    this.showPlaceholder(
+      'Segmentation output unavailable'
+    )
+
+    return
+  }
+
+  const context =
+    this.canvas.getContext('2d')
+
+  if (!context) {
+    throw new Error(
+      'Unable to create inference canvas context'
+    )
+  }
+
+  this.canvas.width =
+    this.currentData.width
+
+  this.canvas.height =
+    this.currentData.height
+
+  context.clearRect(
+    0,
+    0,
+    this.canvas.width,
+    this.canvas.height
+  )
+
+  context.drawImage(
+    segmentation.image,
+    0,
+    0,
+    this.canvas.width,
+    this.canvas.height
+  )
+
+  context.fillStyle =
+    'rgba(0, 0, 0, 0.72)'
+
+  context.fillRect(
+    18,
+    18,
+    230,
+    70
+  )
+
+  context.fillStyle = '#ffffff'
+
+  context.font =
+    '600 20px system-ui'
+
+  context.fillText(
+    'Segmentation Mask',
+    32,
+    48
+  )
+
+  context.font =
+    '13px system-ui'
+
+  const processingMs =
+    segmentation.processingMs
+
+  context.fillText(
+    processingMs !== undefined
+      ? `Processing: ${processingMs.toFixed(1)} ms`
+      : 'Processing: -- ms',
+    32,
+    70
+  )
+
+  this.showCanvas()
+
+  this.setProcessingTime(
+    processingMs
+  )
+}
+
+private renderDepth(): void {
+  if (!this.currentData) {
+    this.showPlaceholder(
+      'Depth output unavailable'
+    )
+
+    return
+  }
+
+  const poseDepth =
+    this.currentData.poseDepth
+
+  if (
+    !poseDepth ||
+    !poseDepth.depthImage
+  ) {
+    this.showPlaceholder(
+      'Depth output unavailable'
+    )
+
+    return
+  }
+
+  const context =
+    this.canvas.getContext('2d')
+
+  if (!context) {
+    throw new Error(
+      'Unable to create inference canvas context'
+    )
+  }
+
+  this.canvas.width =
+    this.currentData.width
+
+  this.canvas.height =
+    this.currentData.height
+
+  context.clearRect(
+    0,
+    0,
+    this.canvas.width,
+    this.canvas.height
+  )
+
+  context.drawImage(
+    poseDepth.depthImage,
+    0,
+    0,
+    this.canvas.width,
+    this.canvas.height
+  )
+
+  /*
+   * Depth metadata overlay.
+   */
+  context.fillStyle =
+    'rgba(0, 0, 0, 0.72)'
+
+  context.fillRect(
+    18,
+    18,
+    260,
+    112
   )
 
   context.fillStyle = '#ffffff'
@@ -527,13 +853,44 @@ export class InferencePanel {
   context.fillText(
     depthLabel,
     32,
-    50
+    48
+  )
+
+  context.font =
+    '13px system-ui'
+
+  const sourceLabel =
+    poseDepth.depthSource
+      ? poseDepth.depthSource.toUpperCase()
+      : '--'
+
+  context.fillText(
+    `Source: ${sourceLabel}`,
+    32,
+    70
+  )
+
+  context.fillText(
+    `Model: ${poseDepth.depthModelName ?? '--'}`,
+    32,
+    90
+  )
+
+  const depthMs =
+    poseDepth.timingsMs?.depth
+
+  context.fillText(
+    depthMs !== undefined
+      ? `Depth processing: ${depthMs.toFixed(1)} ms`
+      : 'Depth processing: -- ms',
+    32,
+    110
   )
 
   this.showCanvas()
 
   this.setProcessingTime(
-    poseDepth.timingsMs?.depth
+    depthMs
   )
 }
 
