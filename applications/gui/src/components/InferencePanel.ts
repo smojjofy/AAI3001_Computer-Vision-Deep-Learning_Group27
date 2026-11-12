@@ -299,7 +299,7 @@ export class InferencePanel {
   private renderPose(): void {
     if (
       !this.currentData ||
-      !this.currentData.pose
+      !this.currentData.poseDepth
     ) {
       this.showPlaceholder(
         'Pose output unavailable'
@@ -309,7 +309,7 @@ export class InferencePanel {
     }
 
     const pose =
-      this.currentData.pose
+      this.currentData.poseDepth
 
     if (!pose.detected) {
       this.showPlaceholder(
@@ -317,7 +317,7 @@ export class InferencePanel {
       )
 
       this.setProcessingTime(
-        pose.processingMs
+        pose.timingsMs?.pose
       )
 
       return
@@ -445,7 +445,7 @@ export class InferencePanel {
     this.showCanvas()
 
     this.setProcessingTime(
-      pose.processingMs
+      pose.timingsMs?.pose
     )
   }
 
@@ -458,10 +458,10 @@ export class InferencePanel {
     return
   }
 
-  const depth =
-    this.currentData.depth
+  const poseDepth =
+    this.currentData.poseDepth
 
-  if (!depth || !depth.image) {
+  if (!poseDepth || !poseDepth.depthImage) {
     this.showPlaceholder(
       'Depth output unavailable'
     )
@@ -470,7 +470,7 @@ export class InferencePanel {
   }
 
   const depthImage =
-    depth.image
+    poseDepth.depthImage
 
   const context =
     this.canvas.getContext('2d')
@@ -518,9 +518,9 @@ export class InferencePanel {
     '600 20px system-ui'
 
   const depthLabel =
-    depth.kind === 'metric_depth'
+    poseDepth.depthKind === 'metric_depth'
       ? 'Metric Depth'
-      : depth.kind === 'relative_depth'
+      : poseDepth.depthKind === 'relative_depth'
         ? 'Relative Depth'
         : 'Depth Output'
 
@@ -533,7 +533,7 @@ export class InferencePanel {
   this.showCanvas()
 
   this.setProcessingTime(
-    depth.processingMs
+    poseDepth.timingsMs?.depth
   )
 }
 

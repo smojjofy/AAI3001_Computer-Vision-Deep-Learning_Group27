@@ -335,15 +335,6 @@ export function createMockInferenceData(
       processingMs: 12.4,
     },
 
-    depth: {
-      image:
-        createDepthOutput(
-          width,
-          height
-        ),
-      kind: 'relative_depth',
-      processingMs: 28.6,
-    },
 
     flow: {
       image:
@@ -354,9 +345,8 @@ export function createMockInferenceData(
       processingMs: 17.2,
     },
 
-    pose: {
+    poseDepth: {
       detected: true,
-      processingMs: 18.8,
 
       landmarks: [
         {
@@ -423,6 +413,37 @@ export function createMockInferenceData(
           presence: 0.97,
         },
       ],
+
+      jointDepth: [
+        1.82,
+        1.86,
+        1.85,
+        1.91,
+        1.90,
+        1.95,
+        1.94,
+        2.03,
+        2.02,
+      ],
+
+      bodyDepth: 1.92,
+
+      depthImage:
+        createDepthOutput(
+          width,
+          height
+        ),
+
+      depthKind: 'metric_depth',
+      depthSource: 'yolo',
+      depthModelName: 'mock-yolo-depth',
+
+      timingsMs: {
+        pose: 18.8,
+        depth: 28.6,
+        fuse: 1.2,
+        total: 48.6,
+      },
     },
   }
 }
