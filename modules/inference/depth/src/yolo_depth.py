@@ -35,10 +35,10 @@ class YoloDepthEstimator:
             output_size = (int(output_size[0]), int(output_size[1]))
 
         path = Path(checkpoint)
-        if not path.is_file():
+        if not path.exists():                       # a .pt file, or an exported folder (e.g. OpenVINO)
             path = MODELS_DIR / path.name           # download into models/ instead of the cwd
 
-        self._model = YOLO(str(path))
+        self._model = YOLO(str(path), task="depth")
         if self._model.task != "depth":
             raise ValueError(
                 f"{path.name} is a '{self._model.task}' model, not a depth model "

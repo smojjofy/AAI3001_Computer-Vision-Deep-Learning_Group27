@@ -1,9 +1,11 @@
 """Exercise latest-frame flow, reranking, and a simulated slow refresh worker.
-
-Run from the repository root. This command does not create depth, pose, splats,
+ 
+Run from the repository root. By default this command does not create depth, pose, splats,
 or a viewer; the refresh worker only waits for the configured duration.
+ 
+--pose-depth makes the refresh worker run the real PoseDepthPipeline instead
+(MediaPipe Pose Lite + YOLO depth, modules/inference/depth) on each refreshed frame.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -23,6 +25,7 @@ sys.path[:0] = [
     str(ROOT / "modules/reranker/src"),
     str(ROOT / "applications"),
 ]
+sys.path.insert(0, str(ROOT / "modules/inference/depth"))   # pose + depth pipeline ("from src import ...")
 
 from backend.preview_server import PreviewServer  # noqa: E402
 from live_pipeline import LiveRerankerScheduler, RefreshDispatcher  # noqa: E402
@@ -45,7 +48,10 @@ def main() -> None:
                         help="Run length in seconds; 0 runs until Ctrl+C")
     parser.add_argument("--sample-ms", type=float, default=250.0)
     parser.add_argument("--max-reference-age-ms", type=float, default=500.0)
-    parser.add_argument("--refresh-work-ms", type=float, default=1000.0)
+    parser.add_argument("--refresh-work-ms", type=float, default=1000.0,
+                        help="Simulated refresh time (ignored with --pose-depth)")
+    parser.add_argument("--pose-depth", action="store_true",
+                        help="Run MediaPipe pose + YOLO depth as the refresh work instead of sleeping")
     parser.add_argument("--queue-capacity", type=int, default=3)
     parser.add_argument("--gui-preview", action="store_true",
                         help="Serve the same captured frames to the local GUI on port 8765")
@@ -76,12 +82,42 @@ def main() -> None:
     reranker = Reranker(RerankerConfig(max_reference_age_ns=round(args.max_reference_age_ms * 1_000_000)))
     consumer = StreamRerankerConsumer(handler, create_estimator(config), reranker)
 
-    def simulated_refresh(_job) -> None:
-        time.sleep(args.refresh_work_ms / 1000)
+    latest_pose_depth: dict[str, object] = {}       # newest pose + depth result (for the GUI later)
+    pose_depth = None
 
-    dispatcher = RefreshDispatcher(simulated_refresh)
+    if args.pose_depth:
+        from src import PoseDepthPipeline
+        from src.preview import encode_pose_depth_preview
+
+        print("Loading pose + depth models ...", flush=True)
+        pose_depth = PoseDepthPipeline()           # created ONCE; YOLO loads on the first refresh
+
+        def refresh(job) -> None:
+            packet = job.packet
+            # packet.rgb: RGB uint8 [H, W, 3]. No ZED depth on the packet yet -> YOLO depth.
+            out = pose_depth.process_frame(packet.rgb, packet.frame_id, packet.source_id,
+                                           packet.capture_timestamp_ns)
+            latest_pose_depth["result"] = out
+            if args.gui_preview:                      # ready-made images + joints for /api/pose-depth
+                latest_pose_depth["preview"] = encode_pose_depth_preview(packet.rgb, out)
+            if not args.summary_only:
+                print(json.dumps({
+                    "pose_depth_frame_id": out.frame_id,
+                    "person_detected": out.detected,
+                    "person_m": None if math.isnan(out.body_depth) else round(out.body_depth, 2),
+                    "depth_source": out.depth_source,
+                    "ms": {k: round(v, 1) for k, v in out.timings_ms.items()},
+                }), flush=True)
+    else:
+        def refresh(_job) -> None:
+            time.sleep(args.refresh_work_ms / 1000)   # simulated refresh work
+
+    dispatcher = RefreshDispatcher(refresh)
     scheduler = LiveRerankerScheduler(consumer, dispatcher, round(args.sample_ms * 1_000_000))
-    preview_server = PreviewServer(handler) if args.gui_preview else None
+    preview_server = (
+        PreviewServer(handler, pose_depth=lambda: latest_pose_depth.get("preview"))
+        if args.gui_preview else None
+    )
     preview_thread = (
         threading.Thread(target=preview_server.serve_forever, name="gui-preview", daemon=True)
         if preview_server is not None else None
@@ -95,6 +131,8 @@ def main() -> None:
         if preview_thread is not None:
             preview_thread.start()
             print("GUI preview ready at http://127.0.0.1:8765/api/preview", flush=True)
+            if args.pose_depth:
+                print("Pose + depth preview at http://127.0.0.1:8765/api/pose-depth", flush=True)
         while time.monotonic() < deadline:
             observation = scheduler.poll(timeout_s=0.25)
             if observation is None:
@@ -128,6 +166,8 @@ def main() -> None:
                 preview_thread.join(timeout=2)
             preview_server.server_close()
         dispatcher.close(drain=True)
+        if pose_depth is not None:
+            pose_depth.close()
 
     print(json.dumps({"summary": {
         "source": args.source,
@@ -157,6 +197,12 @@ def main() -> None:
         "actions": dict(actions),
         "reasons": dict(reasons),
         "refresh_worker": dispatcher.snapshot(),
+        "pose_depth": None if pose_depth is None or "result" not in latest_pose_depth else {
+            "last_frame_id": latest_pose_depth["result"].frame_id,
+            "last_person_m": (None if math.isnan(latest_pose_depth["result"].body_depth)
+                              else round(latest_pose_depth["result"].body_depth, 2)),
+            "last_timings_ms": {k: round(v, 1) for k, v in latest_pose_depth["result"].timings_ms.items()},
+        },
     }}, indent=2), flush=True)
     if handler.metrics.emitted_frames == 0:
         parser.exit(2, "No frames captured. Check the device index, camera access, OBS Virtual Camera, or try --camera-backend dshow.\n")
