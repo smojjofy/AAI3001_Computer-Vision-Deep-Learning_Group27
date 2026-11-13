@@ -90,7 +90,7 @@ def main() -> None:
         from src.preview import encode_pose_depth_preview
 
         print("Loading pose + depth models ...", flush=True)
-        pose_depth = PoseDepthPipeline()           # created ONCE; YOLO loads on the first refresh
+        pose_depth = PoseDepthPipeline(yolo_model="yolo26n-depth_openvino_model")           
 
         def refresh(job) -> None:
             packet = job.packet
