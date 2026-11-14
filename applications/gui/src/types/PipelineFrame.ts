@@ -3,12 +3,17 @@ import type {
 } from './ProcessorFrame'
 
 import type {
+  InferenceFrameData,
+} from './InferenceFrame'
+
+import type {
   SplatPointData,
 } from '../data/mockSplatData'
 
 export interface PipelineFrame {
   frameId: number | string
-  timestamp: string
+  sourceId?: string
+  captureTimestampNs?: string
 
   original: {
     image: CanvasImageSource
@@ -17,6 +22,8 @@ export interface PipelineFrame {
   }
 
   processor: ProcessorFrameData
+
+  inference: InferenceFrameData
 
   splat: SplatPointData
 }

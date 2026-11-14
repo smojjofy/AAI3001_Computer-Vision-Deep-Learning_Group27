@@ -11,27 +11,42 @@ import {
 } from './mockProcessorData'
 
 import {
+  createMockInferenceData,
+} from './mockInferenceData'
+
+import {
   createMockSplatData,
 } from './mockSplatData'
 
 export function createMockPipelineFrame(
-  frameId = 1
+  frameId = 1,
+  sourceId = 'mock-camera',
+  captureTimestampNs = '0'
 ): PipelineFrame {
-  const timestamp =
-    new Date().toISOString()
-
   const original =
     createMockOriginalFrame(frameId)
 
   const processor =
-    createMockProcessorData(frameId)
+    createMockProcessorData(
+      frameId,
+      sourceId,
+      captureTimestampNs
+    )
+
+  const inference =
+    createMockInferenceData(
+      frameId,
+      sourceId,
+      captureTimestampNs
+    )
 
   const splat =
     createMockSplatData(500)
 
   return {
     frameId,
-    timestamp,
+    sourceId,
+    captureTimestampNs,
 
     original: {
       image: original.image,
@@ -40,7 +55,7 @@ export function createMockPipelineFrame(
     },
 
     processor,
-
+    inference,
     splat,
   }
 }

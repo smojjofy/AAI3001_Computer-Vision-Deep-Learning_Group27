@@ -1,0 +1,4 @@
+[submodule "modules/inference/depth/Depth-Anything-V2"]
+	path = modules/inference/depth/Depth-Anything-V2
+	url = https://github.com/DepthAnything/Depth-Anything-V2
+	ignore = untracked

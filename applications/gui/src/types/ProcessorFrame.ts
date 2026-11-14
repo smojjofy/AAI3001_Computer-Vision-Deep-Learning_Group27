@@ -1,17 +1,12 @@
-export type ProcessorView =
-  | 'rgba'
-  | 'mask'
-  | 'depth'
-  | 'motion'
-
 export interface ProcessorFrameData {
   frameId: number | string
+  sourceId?: string
+  captureTimestampNs?: string
+
   processingMs?: number
 
   width: number
   height: number
 
-  outputs: Partial<
-    Record<ProcessorView, CanvasImageSource>
-  >
+  image?: CanvasImageSource
 }

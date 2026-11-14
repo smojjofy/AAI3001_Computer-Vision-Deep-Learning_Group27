@@ -1,17 +1,6 @@
 import type {
   ProcessorFrameData,
-  ProcessorView,
 } from '../types/ProcessorFrame'
-
-const VIEW_NAMES: Record<
-  ProcessorView,
-  string
-> = {
-  rgba: 'RGBA',
-  mask: 'Foreground Mask',
-  depth: 'Depth',
-  motion: 'Motion / Optical Flow',
-}
 
 export class FrameProcessorPanel {
   private element: HTMLElement
@@ -21,9 +10,8 @@ export class FrameProcessorPanel {
 
   private frameLabel: HTMLElement
   private processingLabel: HTMLElement
-
-  private activeView:
-    ProcessorView = 'rgba'
+  private sourceLabel: HTMLElement
+  private timestampLabel: HTMLElement
 
   private currentData:
     ProcessorFrameData | null = null
@@ -41,40 +29,6 @@ export class FrameProcessorPanel {
       </div>
 
       <div class="viewer-content processor-content">
-        <div class="processor-tabs">
-          <button
-            class="processor-tab"
-            data-view="rgba"
-            type="button"
-          >
-            RGBA
-          </button>
-
-          <button
-            class="processor-tab"
-            data-view="mask"
-            type="button"
-          >
-            Mask
-          </button>
-
-          <button
-            class="processor-tab"
-            data-view="depth"
-            type="button"
-          >
-            Depth
-          </button>
-
-          <button
-            class="processor-tab"
-            data-view="motion"
-            type="button"
-          >
-            Motion
-          </button>
-        </div>
-
         <div class="processor-viewport">
           <canvas
             class="processor-canvas"
@@ -83,7 +37,7 @@ export class FrameProcessorPanel {
           <div
             class="placeholder processor-placeholder"
           >
-            Waiting for RGBA output
+            Waiting for processed frame
           </div>
         </div>
       </div>
@@ -91,6 +45,14 @@ export class FrameProcessorPanel {
       <div class="panel-footer">
         <span class="processor-frame-label">
           Frame: --
+        </span>
+
+        <span class="processor-source-label">
+          Source: --
+        </span>
+
+        <span class="processor-timestamp-label">
+          Capture: --
         </span>
 
         <span class="processor-processing-label">
@@ -113,35 +75,21 @@ export class FrameProcessorPanel {
       this.element.querySelector<HTMLElement>(
         '.processor-frame-label'
       )!
+    
+    this.sourceLabel =
+      this.element.querySelector<HTMLElement>(
+        '.processor-source-label'
+      )!
 
+    this.timestampLabel =
+      this.element.querySelector<HTMLElement>(
+        '.processor-timestamp-label'
+      )!
+    
     this.processingLabel =
       this.element.querySelector<HTMLElement>(
         '.processor-processing-label'
       )!
-
-    const buttons =
-      this.element.querySelectorAll<HTMLButtonElement>(
-        '.processor-tab'
-      )
-
-    buttons.forEach((button) => {
-      button.addEventListener(
-        'click',
-        () => {
-          const view =
-            button.dataset
-              .view as ProcessorView
-
-          this.setActiveView(
-            view
-          )
-        }
-      )
-    })
-
-    this.setActiveView(
-      'rgba'
-    )
   }
 
   getElement(): HTMLElement {
@@ -156,70 +104,34 @@ export class FrameProcessorPanel {
     this.frameLabel.textContent =
       `Frame: ${data.frameId}`
 
+    this.sourceLabel.textContent =
+      `Source: ${data.sourceId ?? '--'}`
+
+    this.timestampLabel.textContent =
+      `Capture: ${data.captureTimestampNs ?? '--'}`
+
     this.processingLabel.textContent =
       data.processingMs !== undefined
         ? `Processing: ${data.processingMs.toFixed(1)} ms`
         : 'Processing: -- ms'
 
-    this.renderActiveView()
+    this.render()
   }
 
-  setActiveView(
-    view: ProcessorView
-  ): void {
-    this.activeView = view
-
-    const buttons =
-      this.element.querySelectorAll<HTMLButtonElement>(
-        '.processor-tab'
-      )
-
-    buttons.forEach(
-      (button) => {
-        button.classList.toggle(
-          'active',
-          button.dataset.view === view
-        )
-      }
-    )
-
-    this.renderActiveView()
-  }
-
-  private renderActiveView(): void {
-    if (!this.currentData) {
+  private render(): void {
+    if (
+      !this.currentData ||
+      !this.currentData.image
+    ) {
       this.showPlaceholder(
-        `Waiting for ${
-          VIEW_NAMES[
-            this.activeView
-          ]
-        } output`
-      )
-
-      return
-    }
-
-    const source =
-      this.currentData.outputs[
-        this.activeView
-      ]
-
-    if (!source) {
-      this.showPlaceholder(
-        `${
-          VIEW_NAMES[
-            this.activeView
-          ]
-        } output unavailable`
+        'Processed frame unavailable'
       )
 
       return
     }
 
     const context =
-      this.canvas.getContext(
-        '2d'
-      )
+      this.canvas.getContext('2d')
 
     if (!context) {
       throw new Error(
@@ -241,7 +153,7 @@ export class FrameProcessorPanel {
     )
 
     context.drawImage(
-      source,
+      this.currentData.image,
       0,
       0,
       this.canvas.width,

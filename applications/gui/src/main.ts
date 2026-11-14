@@ -1,10 +1,11 @@
 import './style.css'
 
+import { InferencePanel } from './components/InferencePanel'
+import { createMockPipelineFrame } from './data/mockPipelineFrame'
 import { OriginalInputPanel } from './components/OriginalInputPanel'
 import { FrameProcessorPanel } from './components/FrameProcessorPanel'
 import { SplatOutputPanel } from './components/SplatOutputPanel'
-import { createMockProcessorData } from './data/mockProcessorData'
-import { createMockSplatData } from './data/mockSplatData'
+
 
 interface PreviewFrame {
   schema_version: '1.0'
@@ -51,14 +52,46 @@ if (!viewerGrid || !status || !statusLabel) {
 const originalInputPanel = new OriginalInputPanel()
 viewerGrid.appendChild(originalInputPanel.getElement())
 
-// These panels remain fixture-driven until their own backends are connected.
-const frameProcessorPanel = new FrameProcessorPanel()
-viewerGrid.appendChild(frameProcessorPanel.getElement())
-frameProcessorPanel.setProcessorData(createMockProcessorData(1))
+const mockFrame =
+  createMockPipelineFrame(
+    1,
+    'mock-camera',
+    '0'
+  )
 
-const splatOutputPanel = new SplatOutputPanel()
-viewerGrid.appendChild(splatOutputPanel.getElement())
-splatOutputPanel.setSplatData(createMockSplatData(500), 1)
+// These panels remain fixture-driven until their own backends are connected.
+const frameProcessorPanel =
+  new FrameProcessorPanel()
+
+viewerGrid.appendChild(
+  frameProcessorPanel.getElement()
+)
+
+frameProcessorPanel.setProcessorData(
+  mockFrame.processor
+)
+
+const inferencePanel =
+  new InferencePanel()
+
+viewerGrid.appendChild(
+  inferencePanel.getElement()
+)
+
+const splatOutputPanel =
+  new SplatOutputPanel()
+
+viewerGrid.appendChild(
+  splatOutputPanel.getElement()
+)
+inferencePanel.setInferenceData(
+  mockFrame.inference
+)
+
+splatOutputPanel.setSplatData(
+  mockFrame.splat,
+  mockFrame.frameId,
+)
 
 function showStatus(label: string, live: boolean): void {
   statusLabel!.textContent = label
