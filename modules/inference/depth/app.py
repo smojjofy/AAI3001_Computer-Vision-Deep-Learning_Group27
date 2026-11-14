@@ -76,7 +76,7 @@ def read_point(state, evt: gr.SelectData):
  
 # YOLO depth. Only n is in models/; s and m download there when first picked. get_yolo_depth loads a model once and caches it for reuse.
  
-YOLO_DEPTH_MODELS = ["yolo26n-depth.pt", "yolo26s-depth.pt", "yolo26m-depth.pt"]   # n = fastest
+YOLO_DEPTH_MODELS = ["yolo26n-depth_openvino_model","yolo26n-depth.pt", "yolo26s-depth.pt", "yolo26m-depth.pt"]   # n = fastest
 _yolo_depths: dict[tuple, object] = {}   # loaded once per (model, device, imgsz), then reused
  
  

@@ -7,3 +7,4 @@ ultralytics             # YOLO depth
 gradio                  # app.py
 pytest                  # tests/
 mediapipe               # Pose + depth tab, scripts/test_pose_depth_image.py (pose module's dependency)
+openvino                # OpenVINO depth model, improvement by 27% for latency on CPU (see scripts/run_live_scheduler.py)
