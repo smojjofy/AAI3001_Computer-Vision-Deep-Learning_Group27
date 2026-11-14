@@ -7,12 +7,12 @@ import logging
 import time
 
 from .handler import StreamHandler
-from .sources import CameraSource, OBSVirtualCameraSource, RecordedVideoSource, ReplayMode, RTSPSource
+from .sources import CameraSource, OBSVirtualCameraSource, RecordedVideoSource, ReplayMode, RTSPSource,ZedCameraSource
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect a live-splat frame source without storing imagery.")
-    parser.add_argument("--source", choices=("camera", "obs", "video", "rtsp"), default="obs")
+    parser.add_argument("--source", choices=("camera", "obs", "video", "rtsp","zed"), default="obs")
     parser.add_argument("--device", type=int, default=0, help="Camera index for --source camera or obs.")
     parser.add_argument("--camera-backend", choices=("auto", "dshow", "msmf"), default="auto")
     parser.add_argument("--path", help="Path for --source video.")
@@ -35,6 +35,8 @@ def _source_from_args(args: argparse.Namespace):
         if not args.path:
             raise SystemExit("--path is required for --source video")
         return RecordedVideoSource(args.path, replay_mode=ReplayMode(args.replay_mode))
+    if args.source == "zed":
+        return ZedCameraSource(camera_id=args.zed_id)
     if not args.url:
         raise SystemExit("--url is required for --source rtsp")
     return RTSPSource(args.url)
