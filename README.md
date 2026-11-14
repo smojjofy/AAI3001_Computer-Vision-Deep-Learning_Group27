@@ -182,15 +182,62 @@ OpenCV DIS is the implemented reduced-resolution baseline. Torchvision RAFT
 Small is an implemented, optional backend when its PyTorch dependencies and
 weights are available; it must be benchmarked against DIS on project footage.
 SEA-RAFT remains a future candidate if selection or splat adjustment needs more
-accurate flow. Depth Anything 3 Small/Base are candidates for depth; the depth
-model and any human-pose estimator have not been selected or integrated.
-Human body pose and camera pose are different outputs. Foreground segmentation
+accurate flow. A YOLO26 depth pipeline and a MediaPipe pose pipeline are now
+merged into this tree (`modules/inference/depth/`, `modules/inference/pose/`),
+with a ZED depth path and pose-depth fusion. Human body pose and camera pose are
+different outputs. Foreground segmentation
 remains necessary for alpha. Estimator workers may finish at different times;
 their results must be joined by original frame ID and timestamp, never callback
 arrival order. Begin integration with model stubs and recorded fixtures.
 
 The reranker selection contract is documented in
 [`docs/interfaces/reranker.md`](docs/interfaces/reranker.md).
+
+## Splat Constructor (implemented)
+
+`modules/splat_constructor/` contains a dependency-free C++20 CPU constructor,
+native tests, a CLI that writes a standard 62-property 3DGS PLY plus metadata,
+and a NumPy/ctypes bridge. The in-memory boundary is `ConstructionFrame` v1 to
+`SplatState` v1, documented in `shared/schemas/` and
+`modules/splat_constructor/README.md`.
+
+Build the native core first; this emits the CLI, the test binary, and the
+Python-loadable bridge DLL:
+
+```powershell
+./scripts/build_splat_constructor.ps1
+./build/splat_constructor/splat_constructor_tests.exe
+```
+
+The bridge takes aligned `uint8 (H,W,3)` RGB, `float32 (H,W)` depth, and binary
+`uint8 (H,W)` foreground mask, plus `frame_id`, positive `timestamp_ns`,
+`source_id`, intrinsics `(fx, fy, cx, cy)`, and a row-major rigid
+`camera_to_world` pose:
+
+```python
+from modules.splat_constructor import (
+    ConstructionFrame, ConstructionConfig,
+    DepthSemantics, DepthUnits, construct_splat_state,
+)
+
+frame = ConstructionFrame(
+    frame_id="0001",
+    timestamp_ns=source_timestamp_ns,
+    source_id="camera_01",
+    rgb=rgb_u8,
+    depth=relative_inverse_depth_f32,
+    foreground_mask=foreground_mask_u8,
+    intrinsics=(fx, fy, cx, cy),
+    depth_semantics=DepthSemantics.RELATIVE_INVERSE,
+    depth_units=DepthUnits.UNITLESS,
+)
+state = construct_splat_state(frame, ConstructionConfig(sample_stride=2))
+```
+
+The constructor also accepts `DepthSemantics.METRIC_CAMERA_Z` with
+`DepthUnits.METERS`. `construction_frame_from_estimates()` converts estimator
+outputs and rejects misaligned tensors. The output is a mask-shaped relief until
+a depth source with consistent scale feeds it; it is not a metric scan.
 
 ## Hardware target and troubleshooting
 

@@ -1,11 +1,21 @@
 *.excalidraw
-__pycache__/
-*.py[cod]
-.venv/
-tmp.md
+tmp*
 /.codex
 /data/recordings/
 /data/processed/
 /checkpoints/
 /outputs/
+/build/
 /modules/unreal_adapter/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+#Test Data Control
+/test_data/gaussian_splatting/FO_dataset/drjohnson
+/test_data/gaussian_splatting/FO_dataset/playroom
+/test_data/gaussian_splatting/FO_dataset/truck
+*.ply
