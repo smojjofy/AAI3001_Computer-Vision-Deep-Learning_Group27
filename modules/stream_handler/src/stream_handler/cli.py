@@ -17,6 +17,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-backend", choices=("auto", "dshow", "msmf"), default="auto")
     parser.add_argument("--path", help="Path for --source video.")
     parser.add_argument("--url", help="RTSP URL for --source rtsp; do not put credentials in shell history.")
+    parser.add_argument("--zed-id", type=int, default=0, help="Camera ID for --source zed.")
     parser.add_argument("--duration", type=float, default=15.0, help="Diagnostic run duration in seconds.")
     parser.add_argument("--queue-capacity", type=int, default=3, choices=range(1, 5))
     parser.add_argument(

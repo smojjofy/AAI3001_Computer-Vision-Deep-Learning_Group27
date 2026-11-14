@@ -19,3 +19,6 @@ __pycache__/
 /test_data/gaussian_splatting/FO_dataset/playroom
 /test_data/gaussian_splatting/FO_dataset/truck
 *.ply
+
+# Local scratch
+.tmp/

@@ -10,7 +10,6 @@ import time
 from typing import Iterable, Protocol
 
 import numpy as np
-import pyzed.sl as zed
 
 class StreamHealth(StrEnum):
     CONNECTING = "connecting"
@@ -33,6 +32,22 @@ class SourceExhausted(StopIteration):
 
 class SourceReadError(RuntimeError):
     """A live source failed and may be reopened by the handler."""
+
+
+def _load_zed_sdk():
+    """Import the Stereolabs ZED SDK on demand.
+
+    The SDK is optional: only the ZED source needs it. Importing it lazily keeps
+    camera, OBS, video, and RTSP sources usable on machines without the SDK.
+    """
+    try:
+        import pyzed.sl as zed
+    except ModuleNotFoundError as error:
+        raise SourceReadError(
+            "The Stereolabs ZED SDK (pyzed) is not installed. Install it from the "
+            "ZED SDK installer, or select a different --source."
+        ) from error
+    return zed
 
 
 @dataclass(frozen=True)
@@ -199,23 +214,44 @@ class RTSPSource(OpenCVFrameSource):
         super().__init__(url, source_id)
 
 class ZedCameraSource:
-    """FrameSource implementation for Stereolabs ZED SDK."""
+    """FrameSource implementation for the Stereolabs ZED SDK.
 
-    def __init__(self, camera_id: int = 0, source_id: str | None = None, resolution: zed.RESOLUTION = zed.RESOLUTION.HD1080) -> None:
+    The SDK is imported on first use, so importing the package does not require
+    it. The source returns the left image as BGR8 plus the SDK depth map in
+    millimetres. ``StreamHandler`` does not forward ``SourceFrame.depth`` yet;
+    the depth map stays available for the refresh stage.
+    """
+
+    def __init__(
+        self,
+        camera_id: int = 0,
+        source_id: str | None = None,
+        resolution: str | object | None = None,
+    ) -> None:
+        self._sl = _load_zed_sdk()
         self.source_id = source_id or f"zed:{camera_id}"
         self.camera_id = camera_id
-        self.resolution = resolution
-        
-        self._zed = zed.Camera()
-        self._image_mat = zed.Mat()
-        self._depth_mat = zed.Mat()  # Add depth matrix holder
+        if resolution is None:
+            self.resolution = self._sl.RESOLUTION.HD1080
+        elif isinstance(resolution, str):
+            try:
+                self.resolution = getattr(self._sl.RESOLUTION, resolution.upper())
+            except AttributeError as error:
+                raise ValueError(f"Unknown ZED resolution: {resolution!r}") from error
+        else:
+            self.resolution = resolution
+
+        self._zed = self._sl.Camera()
+        self._image_mat = self._sl.Mat()
+        self._depth_mat = self._sl.Mat()
         self._opened = False
 
     def open(self) -> None:
+        zed = self._sl
         init_params = zed.InitParameters()
         init_params.camera_resolution = self.resolution
-        init_params.depth_mode = zed.DEPTH_MODE.ULTRA  # Select depth quality mode
-        init_params.coordinate_units = zed.UNIT.MILLIMETER  # Distance units (e.g. MILLIMETER or METER)
+        init_params.depth_mode = zed.DEPTH_MODE.ULTRA
+        init_params.coordinate_units = zed.UNIT.MILLIMETER
         init_params.set_from_camera_id(self.camera_id)
 
         err = self._zed.open(init_params)
@@ -224,31 +260,27 @@ class ZedCameraSource:
         self._opened = True
 
     def read(self) -> SourceFrame:
+        zed = self._sl
         if not self._opened:
             raise SourceReadError("ZED source is not open")
 
         if self._zed.grab() == zed.ERROR_CODE.SUCCESS:
-            # 1. Retrieve 2D image
             self._zed.retrieve_image(self._image_mat, zed.VIEW.LEFT)
             bgra_image = self._image_mat.get_data()
             bgr_image = np.ascontiguousarray(bgra_image[:, :, :3])
-            
-            # 2. Retrieve Depth Map
+
             self._zed.retrieve_measure(self._depth_mat, zed.MEASURE.DEPTH)
-            depth_map = self._depth_mat.get_data().copy()  # float32 array
-            
-            # 3. Retrieve Timestamp
+            depth_map = self._depth_mat.get_data().copy()
             timestamp_ns = self._zed.get_timestamp(zed.TIME_REFERENCE.IMAGE).get_nanoseconds()
 
             return SourceFrame(
                 image=bgr_image,
                 pixel_format="BGR8",
                 source_timestamp_ns=timestamp_ns,
-                depth=depth_map,  # Pass depth map here
+                depth=depth_map,
             )
-        else:
-            raise SourceReadError("Failed to grab frame from ZED camera")
-        
+        raise SourceReadError("Failed to grab frame from ZED camera")
+
     def close(self) -> None:
         if self._opened:
             self._zed.close()
