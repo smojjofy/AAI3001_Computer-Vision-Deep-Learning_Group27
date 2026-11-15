@@ -99,6 +99,61 @@ def test_depth_threshold_mask_rejects_full_frame_band() -> None:
     assert result.area_fraction > 0.9
 
 
+def test_hole_fill_does_not_invert_a_corner_touching_region() -> None:
+    # RT-0018: a small band that touches the image corner made the old fill
+    # return the whole frame. The mask must stay at the component size, and the
+    # final area guard must judge the post-fill mask.
+    height, width = 40, 50
+    depth = np.full((height, width), 5.0, np.float32)
+    depth[0:8, 0:8] = 1.2
+    result = depth_threshold_mask(
+        depth,
+        DepthThresholdConfig(
+            band_m=0.5,
+            near_percentile=0.0,
+            closing_px=1,
+            fill_holes=True,
+            min_area_fraction=0.005,
+        ),
+    )
+    assert int(result.mask.sum()) == 64
+    assert result.area_fraction == pytest.approx(64 / (height * width))
+    assert result.mask[0, 0] == 1
+    assert result.mask[height - 1, width - 1] == 0
+
+
+def test_hole_fill_keeps_a_normal_person_region() -> None:
+    depth = synthetic_depth()
+    result = depth_threshold_mask(depth, DepthThresholdConfig(band_m=0.9, closing_px=3))
+    assert result.detected
+    assert result.area_fraction < 0.60
+    assert result.mask[30, 40] == 1
+    assert result.mask[0, 0] == 0
+
+
+def test_hole_fill_adds_enclosed_holes_only() -> None:
+    from applications.live_pipeline.adapters import _fill_holes_from_background
+
+    mask = np.zeros((20, 30), np.uint8)
+    mask[4:16, 6:24] = 1
+    mask[8:12, 12:18] = 0  # enclosed hole
+    filled = _fill_holes_from_background(mask)
+    assert filled.dtype == np.uint8
+    assert set(np.unique(filled)) <= {0, 1}
+    assert int(filled.sum()) == int(mask[4:16, 6:24].size)
+    assert filled[10, 15] == 1
+    assert filled[0, 0] == 0
+
+
+def test_hole_fill_keeps_a_corner_touching_region_exact() -> None:
+    from applications.live_pipeline.adapters import _fill_holes_from_background
+
+    mask = np.zeros((20, 30), np.uint8)
+    mask[0:6, 0:6] = 1  # touches the top-left corner
+    filled = _fill_holes_from_background(mask)
+    assert np.array_equal(filled, mask)
+
+
 def test_construction_frame_replaces_nan_and_keeps_validity() -> None:
     rgb = np.zeros((60, 80, 3), np.uint8)
     depth = synthetic_depth()

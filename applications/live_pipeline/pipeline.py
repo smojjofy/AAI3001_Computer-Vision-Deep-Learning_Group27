@@ -30,16 +30,33 @@ DEPTH_ROOT = ROOT / "modules" / "inference" / "depth"
 
 
 class RefreshError(RuntimeError):
-    """A refresh cannot produce a valid state; the caller keeps the active state."""
+    """A refresh cannot produce a valid state; the caller keeps the active state.
+
+    ``person_missing`` is True when the selected frame has no valid person pose
+    or no separable person mask. That is the invalid-person event from
+    `CONTEXT.md` that starts the 500 ms hold and fade. Other failures (model
+    load, native construction) are recorded but do not start that timer.
+    """
+
+    def __init__(self, message: str, *, person_missing: bool = False) -> None:
+        super().__init__(message)
+        self.person_missing = bool(person_missing)
 
 
 @dataclass(frozen=True)
 class RefreshOutcome:
-    """Everything one refresh produced, with identity preserved."""
+    """Everything one refresh produced, with identity preserved.
+
+    ``pose_joints`` lives here, not beside the state holder, so a splat state
+    and the pose joints that belong to it are always published together.
+    ``person_missing`` is True only for pose or mask absence, which is the
+    invalid-person event that starts the hold-then-fade timer.
+    """
 
     frame_id: int
     source_id: str
     capture_timestamp_ns: int
+    generation: int
     state: Any
     header: dict[str, Any]
     buffer: bytes
@@ -47,6 +64,8 @@ class RefreshOutcome:
     depth_m: np.ndarray
     timings_ms: dict[str, float]
     pose_preview: dict[str, Any] | None = None
+    pose_joints: list[dict[str, Any]] | None = None
+    pose_confidence: float = 0.0
     depth_source: str = "yolo"
 
     @property
@@ -81,8 +100,12 @@ class RefreshPipeline:
     yolo_imgsz: int = 640
     device: str = "auto"
     require_pose: bool = True
+    generation: int = 0
     _pipeline: Any = field(default=None, init=False, repr=False)
     _intrinsics: tuple[float, float, float, float] | None = field(default=None, init=False, repr=False)
+    _intrinsics_key: tuple[int, int, tuple[float, float, float, float] | None] | None = field(
+        default=None, init=False, repr=False
+    )
     refresh_count: int = field(default=0, init=False)
     failure_count: int = field(default=0, init=False)
     last_error: str | None = field(default=None, init=False)
@@ -102,14 +125,35 @@ class RefreshPipeline:
             self._intrinsics = tuple(float(value) for value in intrinsics)  # type: ignore[assignment]
         else:
             self._intrinsics = webcam_intrinsics(width, height, self.horizontal_fov_deg)
+        self._intrinsics_key = self._intrinsics_key_for(width, height, intrinsics)
+
+    @staticmethod
+    def _intrinsics_key_for(
+        width: int,
+        height: int,
+        intrinsics: tuple[float, float, float, float] | None,
+    ) -> tuple[int, int, tuple[float, float, float, float] | None]:
+        if intrinsics is None:
+            return (int(width), int(height), None)
+        return (int(width), int(height), tuple(float(value) for value in intrinsics))
+
+    def _ensure_intrinsics(self, packet) -> tuple[float, float, float, float]:
+        """Select intrinsics for this packet; re-derive them when the identity changes.
+
+        A resolution change, a calibration change, or a source restart must not
+        keep focal lengths from an earlier image size.
+        """
+        key = self._intrinsics_key_for(packet.width, packet.height, packet.intrinsics)
+        if self._intrinsics is None or self._intrinsics_key != key:
+            self.configure_for_frame(packet.width, packet.height, packet.intrinsics)
+        intrinsics = self._intrinsics
+        assert intrinsics is not None
+        return intrinsics
 
     def process(self, packet) -> RefreshOutcome:
         """Run pose, depth, mask, and construction for one selected frame."""
         started = perf_counter()
-        if self._intrinsics is None:
-            self.configure_for_frame(packet.width, packet.height, packet.intrinsics)
-        intrinsics = self._intrinsics
-        assert intrinsics is not None
+        intrinsics = self._ensure_intrinsics(packet)
 
         pipeline = self._ensure_pipeline()
         depth_input = None
@@ -136,7 +180,7 @@ class RefreshPipeline:
             # state. Do not build a person state from background splats.
             self.failure_count += 1
             self.last_error = "pose not detected in the selected refresh frame"
-            raise RefreshError(self.last_error)
+            raise RefreshError(self.last_error, person_missing=True)
 
         depth_m = np.asarray(result.depth.depth, dtype=np.float32)
         mask_info = depth_threshold_mask(depth_m, self.mask_config)
@@ -148,7 +192,7 @@ class RefreshPipeline:
                 self.mask_config.max_area_fraction,
             )
             self.last_error = f"depth threshold found no person region ({reason})"
-            raise RefreshError(self.last_error)
+            raise RefreshError(self.last_error, person_missing=True)
         t_mask = perf_counter()
 
         try:
@@ -171,7 +215,9 @@ class RefreshPipeline:
 
         try:
             state = construct_splat_state(frame, ConstructionConfig(sample_stride=self.sample_stride))
-            header, buffer = splat_state_payload(state)
+            header, buffer = splat_state_payload(
+            state, generation=int(self.generation), source_frame_id=int(packet.frame_id)
+        )
         except Exception as error:
             self.failure_count += 1
             self.last_error = f"native construction failed: {error!r}"
@@ -202,6 +248,7 @@ class RefreshPipeline:
         header["timings_ms"] = {key: round(value, 2) for key, value in timings.items()}
         header["image_width"] = int(packet.width)
         header["image_height"] = int(packet.height)
+        header["intrinsics"] = [float(value) for value in intrinsics]
         header["pose_confidence"] = round(pose_confidence, 3)
         header["person_detected"] = bool(result.detected)
         header["mask"] = {
@@ -214,11 +261,16 @@ class RefreshPipeline:
         }
         header["depth_source"] = result.depth_source
         header["depth_units_metres"] = True
+        pose_joints = None
+        if pose_preview is not None:
+            candidate_joints = pose_preview.get("joints")
+            pose_joints = list(candidate_joints) if isinstance(candidate_joints, list) else None
         self.refresh_count += 1
         return RefreshOutcome(
             frame_id=packet.frame_id,
             source_id=packet.source_id,
             capture_timestamp_ns=packet.capture_timestamp_ns,
+            generation=int(self.generation),
             state=state,
             header=header,
             buffer=buffer,
@@ -226,6 +278,8 @@ class RefreshPipeline:
             depth_m=depth_m,
             timings_ms=timings,
             pose_preview=pose_preview,
+            pose_joints=pose_joints,
+            pose_confidence=float(pose_confidence),
             depth_source=str(result.depth_source),
         )
 

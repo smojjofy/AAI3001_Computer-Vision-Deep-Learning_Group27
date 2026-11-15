@@ -87,6 +87,9 @@ def main() -> None:
     args = parser.parse_args()
 
     state = PipelineState()
+    # One capture run. A source reopen or resolution change increments it, so
+    # flow, motion, and splat identity never span two runs.
+    run_generation = 0
     pipeline = RefreshPipeline(
         mask_config=DepthThresholdConfig(
             band_m=args.depth_band_m,
@@ -98,16 +101,18 @@ def main() -> None:
         yolo_model=args.yolo_model,
         device=args.device_inference,
         require_pose=not args.allow_missing_pose,
+        generation=run_generation,
     )
     estimator = create_estimator(FlowConfig())
     selector = WindowSelector(
         estimator,
         threshold=args.threshold,
         active_age_ns=round(args.active_age_ms * 1_000_000),
+        generation=run_generation,
     )
 
     counters: Counter[str] = Counter()
-    latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None, "pose_joints": None}
+    latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None, "splat_identity": None}
     lock = threading.Lock()
 
     def publish_diagnostics() -> None:
@@ -159,19 +164,28 @@ def main() -> None:
             outcome = pipeline.process(job.packet)
         except RefreshError as error:
             counters["refresh_failed"] += 1
+            if getattr(error, "person_missing", False):
+                # CONTEXT.md invalid-person event: hold starts now and latches
+                # until a successful refresh publishes a state.
+                state.note_invalid_person()
+                counters["person_lost_events"] += 1
             with lock:
                 latest["last_error"] = str(error)
             raise
-        state.publish_splat(outcome.header, outcome.buffer)
+        # One consistent state: splat data and the pose joints that belong to it.
+        state.publish_splat(outcome.header, outcome.buffer, pose_joints=outcome.pose_joints)
         if outcome.pose_preview is not None:
             state.publish_pose_depth(outcome.pose_preview)
         state.publish_mask(outcome.mask.mask)
-        state.publish_motion(None)
         with lock:
             latest["outcome_header"] = outcome.header
             latest["last_error"] = None
-            if outcome.pose_preview is not None:
-                latest["pose_joints"] = outcome.pose_preview.get("joints")
+            latest["splat_identity"] = {
+                "source_id": outcome.source_id,
+                "generation": outcome.generation,
+                "frame_id": outcome.frame_id,
+                "reference_frame_id": outcome.frame_id,
+            }
         counters["refresh_published"] += 1
         print(
             json.dumps(
@@ -208,10 +222,22 @@ def main() -> None:
             dispatcher.submit(RefreshJob(decision.selected.packet, decision.selected.flow, decision))
         else:
             counters["reuse"] += 1
-            with lock:
-                joints = latest.get("pose_joints")
-            preview = build_motion_preview(decision.selected, joints if isinstance(joints, list) else None)
-            state.publish_motion(None if preview is None else preview.to_payload())
+            # Take the identity from the published state, not from a local copy,
+            # so a fetch of the served splat and the motion always agree.
+            identity = state.get_active_identity()
+            if identity is None:
+                state.publish_motion(None)
+            else:
+                # Motion may move only the displayed state, and its pose joints
+                # must be the joints published with that state.
+                preview = build_motion_preview(
+                    decision.selected,
+                    state.get_pose_joints(),
+                    source_id=identity.source_id,
+                    generation=identity.generation,
+                    splat_frame_id=identity.reference_frame_id,
+                )
+                state.publish_motion(None if preview is None else preview.to_payload())
         window = []
         window_start_capture = None
         window_started_wall = None
@@ -219,6 +245,7 @@ def main() -> None:
 
     deadline = math.inf if args.duration_s == 0 else time.monotonic() + args.duration_s
     started = time.monotonic()
+    last_packet_identity: tuple[str, tuple[int, int], int, str] | None = None
     handler.start()
     server_thread.start()
     print(f"Integrated app: http://127.0.0.1:{args.port}/  (Ctrl+C stops)", flush=True)
@@ -227,6 +254,30 @@ def main() -> None:
             packet = handler.queue.get(timeout_s=0.02)
             if packet is not None:
                 counters["frames"] += 1
+                # A new capture run after a source reopen or a resolution change
+                # resets the retained reference, the active state identity, and
+                # any motion, so no flow or warp spans two runs.
+                if last_packet_identity is not None:
+                    previous = last_packet_identity
+                    if (
+                        packet.source_id != previous[0]
+                        or (packet.width, packet.height) != previous[1]
+                        or int(packet.capture_timestamp_ns) < previous[2]
+                        or str(packet.timestamp_origin) != previous[3]
+                    ):
+                        run_generation += 1
+                        selector.set_generation(run_generation)
+                        pipeline.generation = run_generation
+                        state.publish_motion(None)
+                        with lock:
+                            latest["splat_identity"] = None
+                        counters["run_generation_changes"] += 1
+                last_packet_identity = (
+                    packet.source_id,
+                    (packet.width, packet.height),
+                    int(packet.capture_timestamp_ns),
+                    str(packet.timestamp_origin),
+                )
                 latest["last_capture_ns"] = int(packet.capture_timestamp_ns)
                 candidate = selector.observe(packet)
                 window.append(candidate)

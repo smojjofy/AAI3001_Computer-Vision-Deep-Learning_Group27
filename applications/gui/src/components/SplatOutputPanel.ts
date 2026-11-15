@@ -122,6 +122,12 @@ export class SplatOutputPanel {
   private sourceHeight = DEFAULT_SOURCE_HEIGHT
   private splatCount = 0
   private displayAlpha = 1
+  private activeIdentity: { sourceId: string; generation: number; frameId: number } | null = null
+  private pendingOpacityLogits: Float32Array | null = null
+  /** Viewer clock anchor for the hold-then-fade rule (ms since first loss). */
+  private lossAnchorMs: number | null = null
+  private lossHoldMs = 500
+  private lossFadeMs = 500
 
   private hasFitted = false
   private animationFrameId = 0
@@ -283,25 +289,31 @@ export class SplatOutputPanel {
       colors[colorOffset + 3] = toByte(sigmoid(frame.opacityLogits[index]) * alpha)
     }
 
-    // Derive the capture image size from the principal point. The transport
-    // header has no width/height, and this repository's intrinsics are built
-    // with the half-pixel convention cx = (W - 1) / 2, cy = (H - 1) / 2.
+    // The transport header supplies the capture image size. Fall back to the
+    // principal point only for an older payload that does not carry it.
     const [fx, fy, cx, cy] = header.intrinsics
     this.intrinsics = {
       fx: Number.isFinite(fx) && fx > 0 ? fx : 800,
       fy: Number.isFinite(fy) && fy > 0 ? fy : 800,
     }
+    const headerWidth = Number(header.image_width ?? 0)
+    const headerHeight = Number(header.image_height ?? 0)
     this.sourceWidth =
-      Number.isFinite(cx) && cx > 0
-        ? Math.round(2 * cx + 1)
-        : DEFAULT_SOURCE_WIDTH
+      Number.isFinite(headerWidth) && headerWidth > 0
+        ? Math.round(headerWidth)
+        : Number.isFinite(cx) && cx > 0
+          ? Math.round(2 * cx + 1)
+          : DEFAULT_SOURCE_WIDTH
     this.sourceHeight =
-      Number.isFinite(cy) && cy > 0
-        ? Math.round(2 * cy + 1)
-        : DEFAULT_SOURCE_HEIGHT
+      Number.isFinite(headerHeight) && headerHeight > 0
+        ? Math.round(headerHeight)
+        : Number.isFinite(cy) && cy > 0
+          ? Math.round(2 * cy + 1)
+          : DEFAULT_SOURCE_HEIGHT
     this.sourcePixels = frame.sourcePixels
     this.splatCount = count
     this.displayAlpha = alpha
+    this.lossAnchorMs = null
 
     const descriptor: SplatDescriptor = {
       basePositions,
@@ -312,6 +324,12 @@ export class SplatOutputPanel {
     this.pendingDescriptor = descriptor
     this.basePositions = basePositions
     this.activeFrameId = header.frame_id
+    this.activeIdentity = {
+      sourceId: String(header.source_id ?? ''),
+      generation: Number(header.generation ?? 0),
+      frameId: Number(header.frame_id),
+    }
+    this.pendingOpacityLogits = frame.opacityLogits
 
     if (
       this.activeSplat !== null &&
@@ -373,10 +391,115 @@ export class SplatOutputPanel {
   }
 
   /**
+   * True when motion describes the displayed splat state: same source and
+   * generation, its reference is the displayed frame, and its candidate frame
+   * is later than that reference.
+   */
+  private motionMatchesActiveState(motion: MotionPayload): boolean {
+    const identity = this.activeIdentity
+    if (identity === null) {
+      return false
+    }
+    if ((motion.source_id ?? '') !== identity.sourceId) {
+      return false
+    }
+    if (Number(motion.generation ?? 0) !== identity.generation) {
+      return false
+    }
+    if (motion.reference_frame_id !== identity.frameId) {
+      return false
+    }
+    return motion.frame_id > motion.reference_frame_id
+  }
+
+  /**
+   * Start the hold-then-fade rule on the viewer clock from the server's
+   * `person_loss_age_ms`. A repeated call with an age that continues the
+   * same loss does not restart the hold. Passing null restores full alpha.
+   */
+  setPersonLoss(ageMs: number | null): void {
+    if (ageMs === null) {
+      this.lossAnchorMs = null
+      this.applyDisplayAlpha(1)
+      return
+    }
+    const now = performance.now()
+    if (this.lossAnchorMs === null || ageMs < this.currentLossAgeMs(now) - 50) {
+      // First loss, or the server latch restarted: anchor now.
+      this.lossAnchorMs = now - Math.max(0, ageMs)
+    }
+    this.applyDisplayAlpha(this.alphaAt(now))
+  }
+
+  /** Recompute alpha on the viewer clock; call once per animation frame. */
+  tickPersonLoss(): void {
+    if (this.lossAnchorMs === null) {
+      return
+    }
+    this.applyDisplayAlpha(this.alphaAt(performance.now()))
+  }
+
+  private currentLossAgeMs(now: number): number {
+    return this.lossAnchorMs === null ? 0 : now - this.lossAnchorMs
+  }
+
+  private alphaAt(now: number): number {
+    const age = this.currentLossAgeMs(now)
+    if (age <= this.lossHoldMs) {
+      return 1
+    }
+    return Math.max(0, Math.min(1, 1 - (age - this.lossHoldMs) / this.lossFadeMs))
+  }
+
+  /** Scale the stored colour alpha without refetching the splat arrays. */
+  private applyDisplayAlpha(alpha: number): void {
+    const next = Math.max(0, Math.min(1, alpha))
+    if (Math.abs(next - this.displayAlpha) < 0.005) {
+      return
+    }
+    this.displayAlpha = next
+    const splat = this.activeSplat
+    const descriptor = this.pendingDescriptor
+    if (splat === null || descriptor === null || splat.data.detached) {
+      this.alphaLabel.textContent = `Alpha: ${next.toFixed(2)}`
+      return
+    }
+    const base = descriptor.colors
+    const target = splat.data.colors
+    if (target.length !== base.length) {
+      return
+    }
+    for (let index = 3; index < base.length; index += 4) {
+      target[index] = base[index]
+    }
+    // Colours were built with the original display alpha folded in, so rebuild
+    // the alpha byte from the opacity logit and the new alpha.
+    const logits = this.pendingOpacityLogits
+    if (logits !== null && logits.length * 4 === base.length) {
+      for (let index = 0; index < logits.length; index++) {
+        target[index * 4 + 3] = toByte(sigmoid(logits[index]) * next)
+      }
+    }
+    splat.data.changed = true
+    splat.raiseChangeEvent()
+    this.alphaLabel.textContent = `Alpha: ${next.toFixed(2)}`
+    this.updateStatus()
+  }
+
+  /**
    * Apply (or clear) the optional reuse warp from one /api/motion payload.
    * Passing null restores the base splat positions.
    */
   setMotionWarp(motion: MotionPayload | null): void {
+    if (motion !== null && !this.motionMatchesActiveState(motion)) {
+      // RT-0019 item 2: motion created for a different state must never move
+      // the displayed splats. Keep the current display and ignore the payload.
+        this.activeMotion = null
+      this.bodyFactors = null
+      this.warpDirty = true
+      this.updateStatus()
+      return
+    }
     this.activeMotion = motion
     if (motion === null) {
       this.bodyFactors = null

@@ -183,18 +183,15 @@ def depth_threshold_mask(
         return DepthThresholdMask(empty, np.zeros((height, width), np.float32), near_m, far_m, valid_fraction, 0.0, 0.0)
     areas = stats[1:, cv2.CC_STAT_AREA]
     largest = 1 + int(np.argmax(areas))
-    area = int(areas[largest - 1])
     keep = (labels == largest).astype(np.uint8)
     if config.fill_holes:
-        filled = keep.copy()
-        flood = np.zeros((height + 2, width + 2), np.uint8)
-        cv2.floodFill(filled, flood, (0, 0), 1)
-        keep = np.maximum(keep, 1 - filled)
+        keep = _fill_holes_from_background(keep)
 
-    area_fraction = area / float(height * width)
+    # Measure the FINAL mask. A fill can grow a small component to a large one,
+    # so the guard must see the area that will reach the constructor.
+    mask_area = int(np.count_nonzero(keep))
+    area_fraction = mask_area / float(height * width)
     if area_fraction < config.min_area_fraction or area_fraction > config.max_area_fraction:
-        # Too small: no person region. Too large: the depth band selected most of
-        # the image, which means the scene has no separable foreground.
         return DepthThresholdMask(empty, np.zeros((height, width), np.float32), near_m, far_m, valid_fraction, area_fraction, 0.0)
 
     mask_bool = keep.astype(bool)
@@ -204,6 +201,25 @@ def depth_threshold_mask(
     confidence = float(np.clip(min(area_fraction / 0.15, 1.0) * valid_inside, 0.0, 1.0))
     validity_plane = (validity & mask_bool).astype(np.float32)
     return DepthThresholdMask(keep, validity_plane, near_m, far_m, valid_fraction, float(area_fraction), confidence)
+
+
+def _fill_holes_from_background(mask: np.ndarray) -> np.ndarray:
+    """Add enclosed holes to a component without trusting a single corner pixel.
+
+    The component is copied into a one-pixel background border before the
+    flood, so the flood can only mark pixels connected to the border. A pixel
+    the flood does not reach is an enclosed hole and becomes foreground. The
+    original component is kept, so a region that touches an image corner stays
+    exactly as it was.
+    """
+    border = 1
+    padded = cv2.copyMakeBorder(mask, border, border, border, border, cv2.BORDER_CONSTANT, value=0)
+    flood = np.zeros((padded.shape[0] + 2, padded.shape[1] + 2), np.uint8)
+    cv2.floodFill(padded, flood, (0, 0), 1)
+    background_reached = (padded == 1)
+    holes = np.logical_not(background_reached)[border:-border, border:-border]
+    filled = np.maximum(mask, holes.astype(np.uint8))
+    return np.ascontiguousarray(filled, dtype=np.uint8)
 
 
 def construction_frame_from_refresh(
@@ -283,18 +299,29 @@ def construction_frame_from_refresh(
     )
 
 
-def splat_state_payload(state: SplatState) -> tuple[dict[str, Any], bytes]:
+def splat_state_payload(
+    state: SplatState,
+    *,
+    generation: int = 0,
+    source_frame_id: int | None = None,
+) -> tuple[dict[str, Any], bytes]:
     """Serialize one ``SplatState`` for the browser renderer.
 
     Returns a JSON-safe header and one binary buffer. The header describes the
     buffer layout; the browser reconstructs typed arrays from it. Identity fields
     and the camera convention travel with the data.
+
+    ``frame_id`` is the constructor string id. ``frame_id_int`` and
+    ``generation`` are the capture identity that reuse motion must match.
     """
     if not isinstance(state, SplatState):
         raise TypeError("state must be a SplatState")
+    frame_id_int = int(source_frame_id) if source_frame_id is not None else int(state.frame_id)
     header: dict[str, Any] = {
         "schema_version": "1.0",
         "frame_id": state.frame_id,
+        "frame_id_int": frame_id_int,
+        "generation": int(generation),
         "source_id": state.source_id,
         "timestamp_ns": int(state.timestamp_ns),
         "count": int(state.positions.shape[0]),

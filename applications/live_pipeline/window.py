@@ -31,15 +31,17 @@ class RetainedReference:
     capture_timestamp_ns: int
     timestamp_origin: str
     rgb: np.ndarray
+    generation: int = 0
 
     @classmethod
-    def copy_of(cls, packet) -> "RetainedReference":
+    def copy_of(cls, packet, generation: int = 0) -> "RetainedReference":
         return cls(
             frame_id=int(packet.frame_id),
             source_id=str(packet.source_id),
             capture_timestamp_ns=int(packet.capture_timestamp_ns),
             timestamp_origin=str(packet.timestamp_origin),
             rgb=np.array(packet.rgb, copy=True),
+            generation=int(generation),
         )
 
 
@@ -53,10 +55,15 @@ class Candidate:
     flow_valid: bool
     reason: str
     reference_frame_id: int | None = None
+    generation: int = 0
 
     @property
     def frame_id(self) -> int:
         return int(self.packet.frame_id)
+
+    @property
+    def source_id(self) -> str:
+        return str(self.packet.source_id)
 
     @property
     def capture_timestamp_ns(self) -> int:
@@ -65,6 +72,8 @@ class Candidate:
     def diagnostics(self) -> dict[str, Any]:
         return {
             "frame_id": self.frame_id,
+            "source_id": self.source_id,
+            "generation": self.generation,
             "capture_timestamp_ns": self.capture_timestamp_ns,
             "flow_score": None if self.score is None else round(float(self.score), 5),
             "flow_valid": self.flow_valid,
@@ -103,7 +112,13 @@ class WindowDecision:
 
 
 class WindowSelector:
-    """Keep one flow reference and score candidates against it."""
+    """Keep one flow reference and score candidates against it.
+
+    ``generation`` identifies one continuous capture run. The application sets
+    it at capture start and on source reopen or resolution change. A generation
+    change resets the reference and the active state identity, so flow from an
+    earlier run can never be compared with a frame from a later run.
+    """
 
     def __init__(
         self,
@@ -112,6 +127,7 @@ class WindowSelector:
         threshold: float = DEFAULT_THRESHOLD,
         active_age_ns: int = DEFAULT_ACTIVE_AGE_NS,
         min_valid_fraction: float = DEFAULT_MIN_VALID_FRACTION,
+        generation: int = 0,
     ) -> None:
         if not np.isfinite(threshold) or threshold < 0.0:
             raise ValueError("threshold must be finite and non-negative")
@@ -119,10 +135,13 @@ class WindowSelector:
             raise ValueError("active_age_ns must be positive")
         if not 0.0 <= min_valid_fraction <= 1.0:
             raise ValueError("min_valid_fraction must be in [0, 1]")
+        if type(generation) is not int or generation < 0:
+            raise ValueError("generation must be a non-negative integer")
         self.estimator = estimator
         self.threshold = float(threshold)
         self.active_age_ns = int(active_age_ns)
         self.min_valid_fraction = float(min_valid_fraction)
+        self.generation = int(generation)
         self.reference: RetainedReference | None = None
         self.active_state_capture_ns: int | None = None
         self.active_state_frame_id: int | None = None
@@ -132,37 +151,50 @@ class WindowSelector:
         self.active_state_capture_ns = None
         self.active_state_frame_id = None
 
+    def set_generation(self, generation: int) -> None:
+        """Start a new capture run: new generation, cleared reference and state."""
+        if type(generation) is not int or generation < 0:
+            raise ValueError("generation must be a non-negative integer")
+        if generation != self.generation:
+            self.generation = int(generation)
+            self.reset()
+
     def observe(self, packet) -> Candidate:
         """Compute the reference-to-candidate flow score for one frame."""
+        generation = self.generation
         reference = self.reference
         if reference is None:
-            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason="bootstrap")
+            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason="bootstrap", generation=generation)
         reference_frame_id = reference.frame_id
-        if reference.source_id != packet.source_id or reference.rgb.shape != packet.rgb.shape:
-            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason="reference_mismatch", reference_frame_id=reference_frame_id)
+        if (
+            reference.generation != generation
+            or reference.source_id != packet.source_id
+            or reference.rgb.shape != packet.rgb.shape
+        ):
+            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason="reference_mismatch", reference_frame_id=reference_frame_id, generation=generation)
         try:
             flow = self.estimator.estimate(reference, packet)
         except (ValueError, RuntimeError) as error:
-            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason=f"flow_error:{error}", reference_frame_id=reference_frame_id)
-        return self._score_candidate(packet, flow, reference_frame_id)
+            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason=f"flow_error:{error}", reference_frame_id=reference_frame_id, generation=generation)
+        return self._score_candidate(packet, flow, reference_frame_id, generation)
 
-    def _score_candidate(self, packet, flow, reference_frame_id: int) -> Candidate:
+    def _score_candidate(self, packet, flow, reference_frame_id: int, generation: int) -> Candidate:
         if flow is None or getattr(flow, "status", None) != "ok":
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_unavailable", reference_frame_id=reference_frame_id)
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_unavailable", reference_frame_id=reference_frame_id, generation=generation)
         valid_mask = getattr(flow, "valid_mask", None)
         vectors = getattr(flow, "flow", None)
         if valid_mask is None or vectors is None or vectors.ndim != 3 or vectors.shape[2] != 2:
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_malformed", reference_frame_id=reference_frame_id)
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_malformed", reference_frame_id=reference_frame_id, generation=generation)
         valid_fraction = float(valid_mask.mean()) if valid_mask.size else 0.0
         if valid_fraction < self.min_valid_fraction:
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_low_validity", reference_frame_id=reference_frame_id)
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_low_validity", reference_frame_id=reference_frame_id, generation=generation)
         magnitudes = np.linalg.norm(vectors[valid_mask], axis=1)
         if magnitudes.size == 0 or not np.isfinite(magnitudes).all():
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_empty", reference_frame_id=reference_frame_id)
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_empty", reference_frame_id=reference_frame_id, generation=generation)
         height, width = vectors.shape[:2]
         diagonal = float(np.hypot(width, height))
         score = float(magnitudes.mean()) / diagonal
-        return Candidate(packet=packet, flow=flow, score=score, flow_valid=True, reason="scored", reference_frame_id=reference_frame_id)
+        return Candidate(packet=packet, flow=flow, score=score, flow_valid=True, reason="scored", reference_frame_id=reference_frame_id, generation=generation)
 
     def _age_exceeded(self, capture_timestamp_ns: int) -> bool:
         if self.active_state_capture_ns is None:
@@ -196,6 +228,6 @@ class WindowSelector:
 
     def commit(self, packet) -> None:
         """Retain ``packet`` after its refresh produced a valid active state."""
-        self.reference = RetainedReference.copy_of(packet)
+        self.reference = RetainedReference.copy_of(packet, generation=self.generation)
         self.active_state_capture_ns = int(packet.capture_timestamp_ns)
         self.active_state_frame_id = int(packet.frame_id)

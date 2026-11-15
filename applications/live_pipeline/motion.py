@@ -23,10 +23,19 @@ DEFAULT_MAX_OFFSET_NDC = 0.15
 
 @dataclass(frozen=True)
 class MotionPreview:
-    """A downsampled reuse flow field plus pose joints, ready for transport."""
+    """A downsampled reuse flow field plus pose joints, ready for transport.
+
+    ``source_id``, ``generation``, and ``reference_frame_id`` identify the
+    splat state that this motion may move. The browser applies the warp only
+    when all three equal the displayed splat state, and only when
+    ``frame_id`` is later than ``reference_frame_id``.
+    """
 
     frame_id: int
     reference_frame_id: int | None
+    source_id: str
+    generation: int
+    splat_frame_id: int | None
     width: int
     height: int
     source_width: int
@@ -36,11 +45,20 @@ class MotionPreview:
     joints: list[dict[str, Any]]
     max_offset_ndc: float
 
+    def identity_valid(self) -> bool:
+        """True when this motion describes a later frame of the same active state."""
+        if self.reference_frame_id is None or self.splat_frame_id is None:
+            return False
+        return self.splat_frame_id == self.reference_frame_id and self.frame_id > self.reference_frame_id
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "schema_version": "1.0",
             "frame_id": int(self.frame_id),
             "reference_frame_id": None if self.reference_frame_id is None else int(self.reference_frame_id),
+            "source_id": self.source_id,
+            "generation": int(self.generation),
+            "splat_frame_id": None if self.splat_frame_id is None else int(self.splat_frame_id),
             "width": int(self.width),
             "height": int(self.height),
             "source_width": int(self.source_width),
@@ -56,10 +74,17 @@ def build_motion_preview(
     candidate,
     joints: list[dict[str, Any]] | None,
     *,
+    source_id: str,
+    generation: int,
+    splat_frame_id: int | None,
     size: tuple[int, int] = DEFAULT_MOTION_SIZE,
     max_offset_ndc: float = DEFAULT_MAX_OFFSET_NDC,
 ) -> MotionPreview | None:
-    """Prepare the reuse-flow payload for one scored candidate, or None."""
+    """Prepare the reuse-flow payload for one scored candidate, or None.
+
+    Returns None when the flow is unusable or the identity is not valid for the
+    active splat state. The caller publishes only a non-None payload.
+    """
     flow = getattr(candidate, "flow", None)
     if flow is None or getattr(flow, "status", None) != "ok":
         return None
@@ -83,9 +108,12 @@ def build_motion_preview(
     small = np.where(small_valid[..., None], small, 0.0).astype(np.float32)
 
     reference = getattr(candidate, "reference_frame_id", None)
-    return MotionPreview(
+    preview = MotionPreview(
         frame_id=int(candidate.frame_id),
         reference_frame_id=None if reference is None else int(reference),
+        source_id=str(source_id),
+        generation=int(generation),
+        splat_frame_id=None if splat_frame_id is None else int(splat_frame_id),
         width=size[0],
         height=size[1],
         source_width=width,
@@ -95,3 +123,4 @@ def build_motion_preview(
         joints=list(joints or []),
         max_offset_ndc=float(max_offset_ndc),
     )
+    return preview if preview.identity_valid() else None

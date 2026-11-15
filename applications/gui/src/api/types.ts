@@ -50,6 +50,11 @@ export interface MotionPayload {
   schema_version: string
   frame_id: number
   reference_frame_id: number | null
+  /** Capture run that produced the flow. Must equal the displayed splat run. */
+  source_id?: string
+  generation?: number
+  /** Frame id of the active splat state the motion may move. */
+  splat_frame_id?: number | null
   width: number
   height: number
   source_width: number
@@ -102,8 +107,22 @@ export interface SplatHeader {
   mask?: SplatMask
   depth_source?: string
   depth_units_metres?: boolean
+  /** [width, height] of the capture image. The header supplies them directly. */
+  image_width?: number
+  image_height?: number
   state_age_ms: number
+  /** 0 while the person is lost (the viewer owns the fade clock), else 1. */
   display_alpha: number
+  person_lost?: boolean
+  generation?: number
+  active_identity?: ActiveStateIdentity | null
+}
+
+export interface ActiveStateIdentity {
+  source_id: string
+  generation: number
+  frame_id: number
+  reference_frame_id: number | null
 }
 
 export interface SplatFrame {
@@ -158,6 +177,11 @@ export interface DiagnosticsPayload {
   refresh_count: number
   refresh_failures: number
   last_error: string | null
+  /** Milliseconds since the first invalid-person event, or null. Latched. */
+  person_loss_age_ms?: number | null
+  person_lost?: boolean
+  active_identity?: ActiveStateIdentity | null
+  motion_active?: boolean
   splat: DiagnosticsSplat | null
   counters: Record<string, number>
   refresh_worker: RefreshWorkerSnapshot | null

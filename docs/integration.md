@@ -83,8 +83,20 @@ ultralytics 8.4.213.
   scale is relative to the scene. Keep the camera and subject at a stable
   distance.
 - MediaPipe pose runs on the CPU runtime. YOLO depth uses the GPU.
-- Reuse warp is an image-space move of the displayed positions. It does not
-  change stored 3D positions and a later refresh corrects drift.
+- Reuse warp is a **source-view** image-space move of the displayed positions.
+  It is exact when the viewer camera looks along the capture view and gains
+  parallax error as the orbit angle grows; only a refresh corrects that. It
+  does not change stored 3D positions.
+- The active-state cache holds one splat state. The browser displays the newest
+  published state only; earlier states are not merged or interpolated.
+- Reuse motion is applied only when its (source_id, generation,
+  reference_frame_id) equals the displayed splat identity and its candidate
+  frame is later than that reference. The backend rejects motion that does not
+  match the published state.
+- Hold and fade follow the **invalid-person** event, not the state age. The
+  server latches the first invalid-person refresh and reports
+  person_loss_age_ms; the browser runs the 500 ms hold and 500 ms fade on its
+  own clock. A slow but valid refresh does not start a fade.
 - The GUI splat renderer uses `gsplat` (splat.js), a standalone WebGL2 Gaussian
   renderer. It is not part of a three.js scene. This is a recorded deviation
   from the earlier "Three.js Gaussian renderer" wording; `@mkkellogg/

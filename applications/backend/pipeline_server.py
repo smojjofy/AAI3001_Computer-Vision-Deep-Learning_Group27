@@ -48,9 +48,37 @@ _CONTENT_TYPES = {
 }
 
 
+@dataclass(frozen=True)
+class ActiveStateIdentity:
+    """Identity of the displayed splat state and the motion allowed to move it."""
+
+    source_id: str
+    generation: int
+    frame_id: int
+    reference_frame_id: int | None
+
+    def same_run(self, source_id: str, generation: int) -> bool:
+        return self.source_id == source_id and self.generation == generation
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "generation": int(self.generation),
+            "frame_id": int(self.frame_id),
+            "reference_frame_id": None if self.reference_frame_id is None else int(self.reference_frame_id),
+        }
+
+
 @dataclass
 class PipelineState:
-    """Thread-safe holder for the newest publishable results."""
+    """Thread-safe holder for the newest publishable results.
+
+    The active state is one splat header and one binary buffer. The browser
+    keeps the newest published state only; earlier Gaussian states are not
+    merged or interpolated. ``person_lost_mono_ns`` latches the first
+    invalid-person refresh attempt and clears on a successful publish, so
+    repeated failures do not restart the hold timer.
+    """
 
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     splat_header: dict[str, Any] | None = None
@@ -60,15 +88,74 @@ class PipelineState:
     motion: dict[str, Any] | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
     last_publish_wall_ns: int = 0
+    active_identity: ActiveStateIdentity | None = None
+    pose_joints: list[dict[str, Any]] | None = None
+    person_lost_mono_ns: int | None = None
+    last_invalid_person_mono_ns: int | None = None
 
-    def publish_splat(self, header: dict[str, Any], buffer: bytes) -> None:
+    def publish_splat(
+        self,
+        header: dict[str, Any],
+        buffer: bytes,
+        *,
+        pose_joints: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Publish one complete state: splat data and its pose joints together.
+
+        A successful publish clears the latched person-loss event and clears
+        any reuse motion, because a new state supersedes its warp.
+        """
         with self._lock:
             self.splat_header = header
             self.splat_buffer = buffer
+            self.pose_joints = list(pose_joints) if pose_joints else None
             self.last_publish_wall_ns = time.monotonic_ns()
+            # A committed state becomes the flow reference for later reuse
+            # windows of the same capture run.
+            display_frame = int(header.get("frame_id_int", header.get("frame_id", 0)) or 0)
+            self.active_identity = ActiveStateIdentity(
+                source_id=str(header.get("source_id", "")),
+                generation=int(header.get("generation", 0) or 0),
+                frame_id=display_frame,
+                reference_frame_id=display_frame,
+            )
+            self.person_lost_mono_ns = None
+            self.motion = None
+
+    def note_invalid_person(self) -> None:
+        """Latch the first invalid-person event; later failures keep the latch."""
+        with self._lock:
+            now = time.monotonic_ns()
+            self.last_invalid_person_mono_ns = now
+            if self.person_lost_mono_ns is None:
+                self.person_lost_mono_ns = now
+
+    def person_loss_age_ms(self) -> float | None:
+        """Milliseconds since the first invalid-person event, or None."""
+        with self._lock:
+            if self.person_lost_mono_ns is None:
+                return None
+            return round((time.monotonic_ns() - self.person_lost_mono_ns) / 1_000_000.0, 1)
 
     def publish_motion(self, payload: dict[str, Any] | None) -> None:
+        """Publish reuse motion only when it matches the displayed splat state."""
         with self._lock:
+            if payload is None:
+                self.motion = None
+                return
+            identity = self.active_identity
+            if identity is None:
+                self.motion = None
+                return
+            if (
+                str(payload.get("source_id", "")) != identity.source_id
+                or int(payload.get("generation", -1)) != identity.generation
+                or payload.get("reference_frame_id") != identity.frame_id
+                or payload.get("splat_frame_id") != identity.frame_id
+                or int(payload.get("frame_id", 0)) <= identity.frame_id
+            ):
+                self.motion = None
+                return
             self.motion = payload
 
     def get_motion(self) -> dict[str, Any] | None:
@@ -92,6 +179,14 @@ class PipelineState:
         with self._lock:
             self.diagnostics = payload
 
+    def get_pose_joints(self) -> list[dict[str, Any]] | None:
+        with self._lock:
+            return self.pose_joints
+
+    def get_active_identity(self) -> ActiveStateIdentity | None:
+        with self._lock:
+            return self.active_identity
+
     def splat_response(self) -> bytes | None:
         with self._lock:
             if self.splat_header is None:
@@ -99,14 +194,13 @@ class PipelineState:
             header = dict(self.splat_header)
             age_ns = time.monotonic_ns() - self.last_publish_wall_ns
             header["state_age_ms"] = round(age_ns / 1_000_000.0, 1)
-            # Hold the state for 500 ms, then fade it over 500 ms.
-            hold_ms = 500.0
-            fade_ms = 500.0
-            age_ms = age_ns / 1_000_000.0
-            if age_ms <= hold_ms:
-                header["display_alpha"] = 1.0
-            else:
-                header["display_alpha"] = round(max(0.0, 1.0 - (age_ms - hold_ms) / fade_ms), 3)
+            # These values describe the state age only. The browser runs the
+            # hold-then-fade clock from /api/diagnostics person_loss_age_ms, so
+            # a slow but valid refresh never starts a fade.
+            header["display_alpha"] = 0.0 if self.person_lost_mono_ns is not None else 1.0
+            header["person_lost"] = self.person_lost_mono_ns is not None
+            if self.active_identity is not None:
+                header["active_identity"] = self.active_identity.to_dict()
             encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
             return struct.pack("<I", len(encoded)) + encoded + self.splat_buffer
 
@@ -120,7 +214,18 @@ class PipelineState:
 
     def get_diagnostics(self) -> dict[str, Any]:
         with self._lock:
-            return dict(self.diagnostics)
+            payload = dict(self.diagnostics)
+            payload["person_loss_age_ms"] = (
+                None
+                if self.person_lost_mono_ns is None
+                else round((time.monotonic_ns() - self.person_lost_mono_ns) / 1_000_000.0, 1)
+            )
+            payload["person_lost"] = self.person_lost_mono_ns is not None
+            payload["active_identity"] = (
+                None if self.active_identity is None else self.active_identity.to_dict()
+            )
+            payload["motion_active"] = self.motion is not None
+            return payload
 
 
 class PipelineServer(ThreadingHTTPServer):

@@ -1,4 +1,4 @@
-"""Tests for the reuse motion preview."""
+"""Tests for the reuse motion preview and its identity contract."""
 
 from __future__ import annotations
 
@@ -23,15 +23,36 @@ class FakeFlow:
     valid_mask: np.ndarray
 
 
-def candidate(magnitude: float = 10.0, width: int = 80, height: int = 40) -> FakeCandidate:
+def candidate(
+    magnitude: float = 10.0,
+    width: int = 80,
+    height: int = 40,
+    frame_id: int = 3,
+    reference_frame_id: int | None = 1,
+) -> FakeCandidate:
     flow = np.zeros((height, width, 2), np.float32)
     flow[..., 0] = magnitude
     flow[..., 1] = -magnitude
-    return FakeCandidate(frame_id=3, flow=FakeFlow("ok", flow, np.ones((height, width), bool)))
+    return FakeCandidate(
+        frame_id=frame_id,
+        flow=FakeFlow("ok", flow, np.ones((height, width), bool)),
+        reference_frame_id=reference_frame_id,
+    )
+
+
+def build(item=None, **overrides):
+    item = item or candidate()
+    kwargs = dict(
+        source_id="cam",
+        generation=4,
+        splat_frame_id=item.reference_frame_id,
+    )
+    kwargs.update(overrides)
+    return build_motion_preview(item, joints=None, **kwargs)
 
 
 def test_flow_is_converted_to_normalized_units() -> None:
-    preview = build_motion_preview(candidate(10.0, 80, 40), joints=None)
+    preview = build()
     assert preview is not None
     payload = preview.to_payload()
     assert payload["source_width"] == 80
@@ -44,23 +65,50 @@ def test_flow_is_converted_to_normalized_units() -> None:
 
 
 def test_invalid_flow_returns_none() -> None:
-    bad = FakeCandidate(frame_id=4, flow=None)
-    assert build_motion_preview(bad, joints=None) is None
-    no_status = FakeCandidate(frame_id=4, flow=FakeFlow("scene_cut", np.zeros((4, 4, 2), np.float32), np.zeros((4, 4), bool)))
-    assert build_motion_preview(no_status, joints=None) is None
+    bad = FakeCandidate(frame_id=4, flow=None, reference_frame_id=1)
+    assert build(bad) is None
+    no_status = FakeCandidate(
+        frame_id=4,
+        flow=FakeFlow("scene_cut", np.zeros((4, 4, 2), np.float32), np.zeros((4, 4), bool)),
+        reference_frame_id=1,
+    )
+    assert build(no_status) is None
 
 
 def test_joints_are_carried() -> None:
     joints = [{"index": 0, "x": 0.5, "y": 0.4, "visibility": 0.9}]
-    preview = build_motion_preview(candidate(), joints=joints)
+    preview = build_motion_preview(
+        candidate(), joints=joints, source_id="cam", generation=4, splat_frame_id=1
+    )
     assert preview is not None
     assert preview.to_payload()["joints"] == joints
 
 
 def test_motion_preview_preserves_frame_identity() -> None:
-    preview = build_motion_preview(candidate(), joints=None)
+    preview = build()
     assert preview is not None
     payload = preview.to_payload()
     assert payload["frame_id"] == 3
     assert payload["reference_frame_id"] == 1
+    assert payload["source_id"] == "cam"
+    assert payload["generation"] == 4
+    assert payload["splat_frame_id"] == 1
     assert len(payload["valid"]) == payload["width"] * payload["height"]
+
+
+def test_motion_rejected_when_reference_is_not_the_active_splat() -> None:
+    # RT-0019 item 2 / RT-0018 A4: motion reference 400 must not move splat 403.
+    item = candidate(frame_id=406, reference_frame_id=400)
+    assert build(item, splat_frame_id=403) is None
+
+
+def test_motion_rejected_when_candidate_is_not_after_the_reference() -> None:
+    item = candidate(frame_id=400, reference_frame_id=400)
+    assert build(item, splat_frame_id=400) is None
+
+
+def test_identity_valid_requires_matching_splat_and_later_candidate() -> None:
+    good = build(candidate(frame_id=9, reference_frame_id=5), splat_frame_id=5)
+    assert good is not None and good.identity_valid()
+    stale = build(candidate(frame_id=4, reference_frame_id=5), splat_frame_id=5)
+    assert stale is None

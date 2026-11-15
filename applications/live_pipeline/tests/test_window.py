@@ -124,3 +124,46 @@ def test_commit_advances_reference_and_active_state() -> None:
     # The retained copy must not alias the caller's buffer.
     first.rgb[:] = 255
     assert window.reference.rgb.max() == 0
+
+
+def test_generation_change_resets_reference_and_state() -> None:
+    window = selector(1.0)
+    first = frame(1, 100)
+    window.commit(first)
+    assert window.reference is not None
+    window.set_generation(1)
+    assert window.reference is None
+    assert window.active_state_capture_ns is None
+    assert window.active_state_frame_id is None
+    assert window.generation == 1
+    # The next candidate is a bootstrap frame, never a reuse of the old run.
+    candidate = window.observe(frame(2, 200))
+    assert candidate.reason == "bootstrap"
+    assert candidate.generation == 1
+    decision = window.select([candidate])
+    assert decision.action == "refresh"
+    assert decision.reason == "bootstrap"
+
+
+def test_flow_is_not_compared_across_generations() -> None:
+    window = selector(1.0)
+    window.commit(frame(1, 100))
+    # Simulate a stale reference from an earlier run that was not reset.
+    window.reference = window.reference.__class__(
+        frame_id=1,
+        source_id="cam",
+        capture_timestamp_ns=100,
+        timestamp_origin="source_presentation",
+        rgb=np.zeros((10, 20, 3), np.uint8),
+        generation=7,
+    )
+    candidate = window.observe(frame(2, 200))
+    assert candidate.reason == "reference_mismatch"
+
+
+def test_commit_stamps_the_current_generation() -> None:
+    window = selector(1.0)
+    window.set_generation(3)
+    window.commit(frame(1, 100))
+    assert window.reference is not None
+    assert window.reference.generation == 3
