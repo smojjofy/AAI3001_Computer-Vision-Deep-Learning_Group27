@@ -80,6 +80,7 @@ class RefreshPipeline:
     yolo_model: str | None = None
     yolo_imgsz: int = 640
     device: str = "auto"
+    require_pose: bool = True
     _pipeline: Any = field(default=None, init=False, repr=False)
     _intrinsics: tuple[float, float, float, float] | None = field(default=None, init=False, repr=False)
     refresh_count: int = field(default=0, init=False)
@@ -130,13 +131,23 @@ class RefreshPipeline:
             raise RefreshError(self.last_error) from error
         t_depth = perf_counter()
 
+        if self.require_pose and not bool(result.detected):
+            # CONTEXT.md: a refresh without a valid pose keeps the last valid
+            # state. Do not build a person state from background splats.
+            self.failure_count += 1
+            self.last_error = "pose not detected in the selected refresh frame"
+            raise RefreshError(self.last_error)
+
         depth_m = np.asarray(result.depth.depth, dtype=np.float32)
         mask_info = depth_threshold_mask(depth_m, self.mask_config)
         if not mask_info.detected:
             self.failure_count += 1
-            self.last_error = (
-                f"depth threshold found no person region (valid_fraction={mask_info.valid_fraction:.3f})"
+            reason = "mask area {:.3f} outside [{:.3f}, {:.3f}]".format(
+                mask_info.area_fraction,
+                self.mask_config.min_area_fraction,
+                self.mask_config.max_area_fraction,
             )
+            self.last_error = f"depth threshold found no person region ({reason})"
             raise RefreshError(self.last_error)
         t_mask = perf_counter()
 

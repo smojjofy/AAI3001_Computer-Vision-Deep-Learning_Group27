@@ -39,6 +39,7 @@ sys.path[:0] = [
 
 from backend.pipeline_server import PipelineServer, PipelineState  # noqa: E402
 from live_pipeline.adapters import DepthThresholdConfig  # noqa: E402
+from live_pipeline.motion import build_motion_preview  # noqa: E402
 from live_pipeline.pipeline import RefreshError, RefreshPipeline  # noqa: E402
 from live_pipeline.scheduler import RefreshDispatcher, RefreshJob  # noqa: E402
 from live_pipeline.window import WindowSelector  # noqa: E402
@@ -77,6 +78,8 @@ def main() -> None:
     parser.add_argument("--horizontal-fov-deg", type=float, default=60.0)
     parser.add_argument("--depth-band-m", type=float, default=0.75)
     parser.add_argument("--depth-near-percentile", type=float, default=2.0)
+    parser.add_argument("--max-mask-area", type=float, default=0.60, help="Reject masks larger than this image fraction")
+    parser.add_argument("--allow-missing-pose", action="store_true", help="Publish a mask-only state when pose is absent")
     parser.add_argument("--yolo-model", default=None, help="YOLO depth weights name or path")
     parser.add_argument("--device-inference", default="auto", help="Torch device for YOLO depth")
     parser.add_argument("--duration-s", type=float, default=0.0, help="0 runs until Ctrl+C")
@@ -88,11 +91,13 @@ def main() -> None:
         mask_config=DepthThresholdConfig(
             band_m=args.depth_band_m,
             near_percentile=args.depth_near_percentile,
+            max_area_fraction=args.max_mask_area,
         ),
         sample_stride=args.sample_stride,
         horizontal_fov_deg=args.horizontal_fov_deg,
         yolo_model=args.yolo_model,
         device=args.device_inference,
+        require_pose=not args.allow_missing_pose,
     )
     estimator = create_estimator(FlowConfig())
     selector = WindowSelector(
@@ -102,7 +107,7 @@ def main() -> None:
     )
 
     counters: Counter[str] = Counter()
-    latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None}
+    latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None, "pose_joints": None}
     lock = threading.Lock()
 
     def publish_diagnostics() -> None:
@@ -139,6 +144,7 @@ def main() -> None:
                     "person_detected": header.get("person_detected"),
                 },
                 "counters": dict(counters),
+                "refresh_worker": dispatcher.snapshot(),
                 "stream_health": str(handler.health()),
                 "queue": {
                     "depth": handler.queue.depth,
@@ -160,9 +166,12 @@ def main() -> None:
         if outcome.pose_preview is not None:
             state.publish_pose_depth(outcome.pose_preview)
         state.publish_mask(outcome.mask.mask)
+        state.publish_motion(None)
         with lock:
             latest["outcome_header"] = outcome.header
             latest["last_error"] = None
+            if outcome.pose_preview is not None:
+                latest["pose_joints"] = outcome.pose_preview.get("joints")
         counters["refresh_published"] += 1
         print(
             json.dumps(
@@ -199,6 +208,10 @@ def main() -> None:
             dispatcher.submit(RefreshJob(decision.selected.packet, decision.selected.flow, decision))
         else:
             counters["reuse"] += 1
+            with lock:
+                joints = latest.get("pose_joints")
+            preview = build_motion_preview(decision.selected, joints if isinstance(joints, list) else None)
+            state.publish_motion(None if preview is None else preview.to_payload())
         window = []
         window_start_capture = None
         window_started_wall = None

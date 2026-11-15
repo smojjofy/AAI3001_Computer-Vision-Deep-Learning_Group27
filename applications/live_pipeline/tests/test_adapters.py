@@ -90,6 +90,15 @@ def test_depth_threshold_mask_rejects_blank_depth() -> None:
     assert result.confidence == 0.0
 
 
+def test_depth_threshold_mask_rejects_full_frame_band() -> None:
+    # A uniform scene has no separable foreground: the band covers everything.
+    depth = np.full((40, 50), 1.5, np.float32)
+    result = depth_threshold_mask(depth, DepthThresholdConfig(band_m=0.9))
+    assert not result.detected
+    assert result.mask.sum() == 0
+    assert result.area_fraction > 0.9
+
+
 def test_construction_frame_replaces_nan_and_keeps_validity() -> None:
     rgb = np.zeros((60, 80, 3), np.uint8)
     depth = synthetic_depth()

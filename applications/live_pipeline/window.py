@@ -52,6 +52,7 @@ class Candidate:
     score: float | None
     flow_valid: bool
     reason: str
+    reference_frame_id: int | None = None
 
     @property
     def frame_id(self) -> int:
@@ -68,6 +69,7 @@ class Candidate:
             "flow_score": None if self.score is None else round(float(self.score), 5),
             "flow_valid": self.flow_valid,
             "reason": self.reason,
+            "reference_frame_id": self.reference_frame_id,
         }
 
 
@@ -135,31 +137,32 @@ class WindowSelector:
         reference = self.reference
         if reference is None:
             return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason="bootstrap")
+        reference_frame_id = reference.frame_id
         if reference.source_id != packet.source_id or reference.rgb.shape != packet.rgb.shape:
-            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason="reference_mismatch")
+            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason="reference_mismatch", reference_frame_id=reference_frame_id)
         try:
             flow = self.estimator.estimate(reference, packet)
         except (ValueError, RuntimeError) as error:
-            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason=f"flow_error:{error}")
-        return self._score_candidate(packet, flow)
+            return Candidate(packet=packet, flow=None, score=None, flow_valid=False, reason=f"flow_error:{error}", reference_frame_id=reference_frame_id)
+        return self._score_candidate(packet, flow, reference_frame_id)
 
-    def _score_candidate(self, packet, flow) -> Candidate:
+    def _score_candidate(self, packet, flow, reference_frame_id: int) -> Candidate:
         if flow is None or getattr(flow, "status", None) != "ok":
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_unavailable")
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_unavailable", reference_frame_id=reference_frame_id)
         valid_mask = getattr(flow, "valid_mask", None)
         vectors = getattr(flow, "flow", None)
         if valid_mask is None or vectors is None or vectors.ndim != 3 or vectors.shape[2] != 2:
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_malformed")
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_malformed", reference_frame_id=reference_frame_id)
         valid_fraction = float(valid_mask.mean()) if valid_mask.size else 0.0
         if valid_fraction < self.min_valid_fraction:
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_low_validity")
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_low_validity", reference_frame_id=reference_frame_id)
         magnitudes = np.linalg.norm(vectors[valid_mask], axis=1)
         if magnitudes.size == 0 or not np.isfinite(magnitudes).all():
-            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_empty")
+            return Candidate(packet=packet, flow=flow, score=None, flow_valid=False, reason="flow_empty", reference_frame_id=reference_frame_id)
         height, width = vectors.shape[:2]
         diagonal = float(np.hypot(width, height))
         score = float(magnitudes.mean()) / diagonal
-        return Candidate(packet=packet, flow=flow, score=score, flow_valid=True, reason="scored")
+        return Candidate(packet=packet, flow=flow, score=score, flow_valid=True, reason="scored", reference_frame_id=reference_frame_id)
 
     def _age_exceeded(self, capture_timestamp_ns: int) -> bool:
         if self.active_state_capture_ns is None:

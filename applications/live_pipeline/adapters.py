@@ -103,6 +103,7 @@ class DepthThresholdConfig:
     band_m: float = 0.75
     near_margin_m: float = 0.20
     min_area_fraction: float = 0.005
+    max_area_fraction: float = 0.60
     closing_px: int = 7
     fill_holes: bool = True
 
@@ -115,6 +116,8 @@ class DepthThresholdConfig:
             raise ValueError("near_margin_m must be non-negative")
         if not 0.0 <= self.min_area_fraction < 1.0:
             raise ValueError("min_area_fraction must be in [0, 1)")
+        if not self.min_area_fraction < self.max_area_fraction <= 1.0:
+            raise ValueError("max_area_fraction must be in (min_area_fraction, 1]")
         if self.closing_px < 1 or self.closing_px % 2 == 0:
             raise ValueError("closing_px must be an odd positive integer")
 
@@ -189,7 +192,9 @@ def depth_threshold_mask(
         keep = np.maximum(keep, 1 - filled)
 
     area_fraction = area / float(height * width)
-    if area_fraction < config.min_area_fraction:
+    if area_fraction < config.min_area_fraction or area_fraction > config.max_area_fraction:
+        # Too small: no person region. Too large: the depth band selected most of
+        # the image, which means the scene has no separable foreground.
         return DepthThresholdMask(empty, np.zeros((height, width), np.float32), near_m, far_m, valid_fraction, area_fraction, 0.0)
 
     mask_bool = keep.astype(bool)
