@@ -97,6 +97,9 @@ class StreamHandler:
                 frame_age_available=age_available,
                 timestamp_status=status,
             ),
+            depth=source_frame.depth,
+            depth_units=source_frame.depth_units,
+            intrinsics=source_frame.intrinsics,
         )
         self._next_frame_id += 1
         self.queue.put(

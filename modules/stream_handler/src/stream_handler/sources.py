@@ -56,6 +56,8 @@ class SourceFrame:
     pixel_format: str = "BGR8"
     source_timestamp_ns: int | None = None
     depth: np.ndarray | None = None
+    depth_units: str | None = None
+    intrinsics: tuple[float, float, float, float] | None = None
 
 
 class FrameSource(Protocol):
@@ -244,6 +246,7 @@ class ZedCameraSource:
         self._zed = self._sl.Camera()
         self._image_mat = self._sl.Mat()
         self._depth_mat = self._sl.Mat()
+        self._intrinsics: tuple[float, float, float, float] | None = None
         self._opened = False
 
     def open(self) -> None:
@@ -257,7 +260,19 @@ class ZedCameraSource:
         err = self._zed.open(init_params)
         if err != zed.ERROR_CODE.SUCCESS:
             raise SourceReadError(f"Failed to open ZED camera: {err}")
+        self._intrinsics = self._read_intrinsics()
         self._opened = True
+
+    def _read_intrinsics(self) -> tuple[float, float, float, float] | None:
+        """Read the left-camera pinhole intrinsics from the SDK, when available."""
+        try:
+            calibration = (
+                self._zed.get_camera_information()
+                .camera_configuration.calibration_parameters.left_cam
+            )
+            return (float(calibration.fx), float(calibration.fy), float(calibration.cx), float(calibration.cy))
+        except Exception:
+            return None
 
     def read(self) -> SourceFrame:
         zed = self._sl
@@ -266,18 +281,33 @@ class ZedCameraSource:
 
         if self._zed.grab() == zed.ERROR_CODE.SUCCESS:
             self._zed.retrieve_image(self._image_mat, zed.VIEW.LEFT)
-            bgra_image = self._image_mat.get_data()
-            bgr_image = np.ascontiguousarray(bgra_image[:, :, :3])
+            image = self._image_mat.get_data()
+            try:
+                import cv2
+            except ImportError as error:
+                raise SourceReadError("OpenCV is required for the ZED colour conversion") from error
+            # VIEW.LEFT normally returns BGRA. Convert explicitly: a plain
+            # channel slice keeps the alpha plane and can break on a padded
+            # stride.
+            if image.ndim == 3 and image.shape[2] == 4:
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+            elif image.ndim == 3 and image.shape[2] == 3:
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            else:
+                raise SourceReadError(f"unexpected ZED image shape: {image.shape}")
+            rgb_image = np.ascontiguousarray(rgb_image)
 
             self._zed.retrieve_measure(self._depth_mat, zed.MEASURE.DEPTH)
             depth_map = self._depth_mat.get_data().copy()
             timestamp_ns = self._zed.get_timestamp(zed.TIME_REFERENCE.IMAGE).get_nanoseconds()
 
             return SourceFrame(
-                image=bgr_image,
-                pixel_format="BGR8",
+                image=rgb_image,
+                pixel_format="RGB8",
                 source_timestamp_ns=timestamp_ns,
-                depth=depth_map,
+                depth=np.ascontiguousarray(depth_map, dtype=np.float32),
+                depth_units="millimetres",
+                intrinsics=self._intrinsics,
             )
         raise SourceReadError("Failed to grab frame from ZED camera")
 

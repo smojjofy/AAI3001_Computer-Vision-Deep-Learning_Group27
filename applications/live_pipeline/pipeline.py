@@ -1,0 +1,222 @@
+"""One refresh: pose + depth -> depth-threshold mask -> native constructor.
+
+The pipeline is intentionally synchronous and single-frame. The caller owns the
+thread and the active-state logic. This keeps the GPU work in one place and makes
+the refresh cost measurable.
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from time import perf_counter
+from typing import Any
+
+import numpy as np
+
+from .adapters import (
+    DepthThresholdConfig,
+    DepthThresholdMask,
+    construction_frame_from_refresh,
+    depth_threshold_mask,
+    depth_to_metres,
+    splat_state_payload,
+    webcam_intrinsics,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+DEPTH_ROOT = ROOT / "modules" / "inference" / "depth"
+
+
+class RefreshError(RuntimeError):
+    """A refresh cannot produce a valid state; the caller keeps the active state."""
+
+
+@dataclass(frozen=True)
+class RefreshOutcome:
+    """Everything one refresh produced, with identity preserved."""
+
+    frame_id: int
+    source_id: str
+    capture_timestamp_ns: int
+    state: Any
+    header: dict[str, Any]
+    buffer: bytes
+    mask: DepthThresholdMask
+    depth_m: np.ndarray
+    timings_ms: dict[str, float]
+    pose_preview: dict[str, Any] | None = None
+    depth_source: str = "yolo"
+
+    @property
+    def splat_count(self) -> int:
+        return int(self.header["count"])
+
+
+def _import_depth_stack():
+    """Import the frozen depth/pose package without installing it.
+
+    The package is imported as ``src`` from ``modules/inference/depth``, matching
+    the module's own run scripts. ``PoseDepthPipeline`` adds the pose package to
+    ``sys.path`` itself.
+    """
+    depth_parent = str(DEPTH_ROOT)
+    if depth_parent not in sys.path:
+        sys.path.insert(0, depth_parent)
+    from src import CameraIntrinsics, PoseDepthPipeline  # type: ignore[import-not-found]
+    from src.preview import encode_pose_depth_preview  # type: ignore[import-not-found]
+
+    return CameraIntrinsics, PoseDepthPipeline, encode_pose_depth_preview
+
+
+@dataclass
+class RefreshPipeline:
+    """Build one person splat state per selected refresh frame."""
+
+    mask_config: DepthThresholdConfig = field(default_factory=DepthThresholdConfig)
+    sample_stride: int = 2
+    horizontal_fov_deg: float = 60.0
+    yolo_model: str | None = None
+    yolo_imgsz: int = 640
+    device: str = "auto"
+    _pipeline: Any = field(default=None, init=False, repr=False)
+    _intrinsics: tuple[float, float, float, float] | None = field(default=None, init=False, repr=False)
+    refresh_count: int = field(default=0, init=False)
+    failure_count: int = field(default=0, init=False)
+    last_error: str | None = field(default=None, init=False)
+
+    def _ensure_pipeline(self):
+        if self._pipeline is None:
+            CameraIntrinsics, PoseDepthPipeline, _ = _import_depth_stack()
+            kwargs: dict[str, Any] = {"device": self.device, "imgsz": self.yolo_imgsz}
+            if self.yolo_model is not None:
+                kwargs["yolo_model"] = self.yolo_model
+            self._pipeline = PoseDepthPipeline(**kwargs)
+        return self._pipeline
+
+    def configure_for_frame(self, width: int, height: int, intrinsics: tuple[float, float, float, float] | None) -> None:
+        """Use capture intrinsics when present, else a fixed field-of-view estimate."""
+        if intrinsics is not None:
+            self._intrinsics = tuple(float(value) for value in intrinsics)  # type: ignore[assignment]
+        else:
+            self._intrinsics = webcam_intrinsics(width, height, self.horizontal_fov_deg)
+
+    def process(self, packet) -> RefreshOutcome:
+        """Run pose, depth, mask, and construction for one selected frame."""
+        started = perf_counter()
+        if self._intrinsics is None:
+            self.configure_for_frame(packet.width, packet.height, packet.intrinsics)
+        intrinsics = self._intrinsics
+        assert intrinsics is not None
+
+        pipeline = self._ensure_pipeline()
+        depth_input = None
+        depth_units = None
+        if packet.depth is not None:
+            depth_input = depth_to_metres(packet.depth, packet.depth_units)
+            depth_units = "metres"
+        try:
+            result = pipeline.process_frame(
+                packet.rgb,
+                packet.frame_id,
+                packet.source_id,
+                packet.capture_timestamp_ns,
+                depth=depth_input,
+            )
+        except Exception as error:  # the caller keeps the active state
+            self.failure_count += 1
+            self.last_error = f"pose/depth failed: {error!r}"
+            raise RefreshError(self.last_error) from error
+        t_depth = perf_counter()
+
+        depth_m = np.asarray(result.depth.depth, dtype=np.float32)
+        mask_info = depth_threshold_mask(depth_m, self.mask_config)
+        if not mask_info.detected:
+            self.failure_count += 1
+            self.last_error = (
+                f"depth threshold found no person region (valid_fraction={mask_info.valid_fraction:.3f})"
+            )
+            raise RefreshError(self.last_error)
+        t_mask = perf_counter()
+
+        try:
+            frame = construction_frame_from_refresh(
+                rgb=packet.rgb,
+                depth_m=depth_m,
+                foreground_mask=mask_info.mask,
+                frame_id=packet.frame_id,
+                timestamp_ns=packet.capture_timestamp_ns,
+                source_id=packet.source_id,
+                intrinsics=intrinsics,
+                depth_validity=mask_info.validity,
+            )
+        except Exception as error:
+            self.failure_count += 1
+            self.last_error = f"construction frame rejected: {error!r}"
+            raise RefreshError(self.last_error) from error
+
+        from modules.splat_constructor import ConstructionConfig, construct_splat_state
+
+        try:
+            state = construct_splat_state(frame, ConstructionConfig(sample_stride=self.sample_stride))
+            header, buffer = splat_state_payload(state)
+        except Exception as error:
+            self.failure_count += 1
+            self.last_error = f"native construction failed: {error!r}"
+            raise RefreshError(self.last_error) from error
+        t_build = perf_counter()
+
+        pose_preview = None
+        pose_confidence = 0.0
+        try:
+            _, _, encode_pose_depth_preview = _import_depth_stack()
+            pose_preview = encode_pose_depth_preview(packet.rgb, result)
+            joints = pose_preview.get("joints") or []
+            visibilities = [
+                float(joint["visibility"])
+                for joint in joints
+                if joint.get("visibility") is not None
+            ]
+            pose_confidence = float(np.mean(visibilities)) if visibilities else 0.0
+        except Exception:
+            pose_preview = None
+
+        timings = {
+            "pose_depth": (t_depth - started) * 1000.0,
+            "mask": (t_mask - t_depth) * 1000.0,
+            "construct": (t_build - t_mask) * 1000.0,
+            "total": (perf_counter() - started) * 1000.0,
+        }
+        header["timings_ms"] = {key: round(value, 2) for key, value in timings.items()}
+        header["pose_confidence"] = round(pose_confidence, 3)
+        header["person_detected"] = bool(result.detected)
+        header["mask"] = {
+            "near_m": None if not np.isfinite(mask_info.near_m) else round(float(mask_info.near_m), 3),
+            "far_m": None if not np.isfinite(mask_info.far_m) else round(float(mask_info.far_m), 3),
+            "area_fraction": round(float(mask_info.area_fraction), 4),
+            "valid_fraction": round(float(mask_info.valid_fraction), 4),
+            "confidence": round(float(mask_info.confidence), 3),
+            "detected": bool(mask_info.detected),
+        }
+        header["depth_source"] = result.depth_source
+        header["depth_units_metres"] = True
+        self.refresh_count += 1
+        return RefreshOutcome(
+            frame_id=packet.frame_id,
+            source_id=packet.source_id,
+            capture_timestamp_ns=packet.capture_timestamp_ns,
+            state=state,
+            header=header,
+            buffer=buffer,
+            mask=mask_info,
+            depth_m=depth_m,
+            timings_ms=timings,
+            pose_preview=pose_preview,
+            depth_source=str(result.depth_source),
+        )
+
+    def close(self) -> None:
+        if self._pipeline is not None:
+            self._pipeline.close()
+            self._pipeline = None

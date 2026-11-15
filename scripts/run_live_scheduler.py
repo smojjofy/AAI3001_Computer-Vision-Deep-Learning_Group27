@@ -112,7 +112,7 @@ def main() -> None:
         def refresh(_job) -> None:
             time.sleep(args.refresh_work_ms / 1000)   # simulated refresh work
 
-    dispatcher = RefreshDispatcher(refresh)
+    dispatcher = RefreshDispatcher(refresh, on_success=lambda job: consumer.commit(job.packet))
     scheduler = LiveRerankerScheduler(consumer, dispatcher, round(args.sample_ms * 1_000_000))
     preview_server = (
         PreviewServer(handler, pose_depth=lambda: latest_pose_depth.get("preview"))

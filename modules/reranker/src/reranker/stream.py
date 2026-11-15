@@ -53,5 +53,9 @@ class StreamRerankerConsumer:
         decision = self.reranker.decide(packet, flow)
         return RerankerObservation(packet, flow, decision, time.perf_counter_ns() - started_ns)
 
+    def commit(self, packet: RGBFrame) -> None:
+        """Retain ``packet`` after its refresh produced a valid active state."""
+        self.reranker.commit_reference(packet)
+
     def reset(self) -> None:
         self.reranker.reset()

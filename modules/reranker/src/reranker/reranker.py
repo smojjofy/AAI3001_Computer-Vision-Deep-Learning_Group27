@@ -97,7 +97,13 @@ class SelectionDecision:
 
 
 class Reranker:
-    """Replace one retained reference when a new frame differs significantly."""
+    """Replace one retained reference when a new frame differs significantly.
+
+    A refresh decision does not change the retained reference by itself. The
+    caller must call :meth:`commit_reference` after the selected frame produces a
+    valid active reconstruction state. This keeps a failed construction from
+    becoming the reference for later flow comparisons.
+    """
 
     def __init__(self, config: RerankerConfig | None = None) -> None:
         self.config = config or RerankerConfig()
@@ -111,6 +117,15 @@ class Reranker:
     def reset(self) -> None:
         """Flush the retained reference, for example when a capture run restarts."""
         self._reference = None
+
+    def commit_reference(self, current: RGBFrame) -> None:
+        """Retain ``current`` as the next flow reference.
+
+        Call this only after the refresh for ``current`` produced a valid state
+        that is now active. The assignment flushes the old copy before it retains
+        this new frame.
+        """
+        self._reference = RetainedFrame.copy_of(current)
 
     def is_reference_expired(self, current: RGBFrame) -> bool:
         reference = self._reference
@@ -192,8 +207,9 @@ class Reranker:
         reason: DecisionReason,
         difference_score: float | None,
     ) -> SelectionDecision:
-        # Assignment flushes the old copy before retaining this new frame.
-        self._reference = RetainedFrame.copy_of(current)
+        # The retained reference changes only when the caller commits a
+        # successful construction. A refresh that fails must not become the
+        # reference for the next flow comparison.
         return SelectionDecision(
             action="refresh",
             source_id=current.source_id,

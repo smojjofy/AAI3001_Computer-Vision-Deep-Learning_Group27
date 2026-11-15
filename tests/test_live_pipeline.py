@@ -71,11 +71,19 @@ class LivePipelineTests(unittest.TestCase):
 
         handler = Handler()
         consumer = StreamRerankerConsumer(handler, ZeroFlowEstimator(), Reranker(RerankerConfig(max_reference_age_ns=500_000_000)))
-        dispatcher = RefreshDispatcher(lambda _job: None)
+        # The reference advances only after the refresh worker succeeds. This
+        # matches the integrated pipeline, which publishes a state and then
+        # commits the retained flow reference.
+        dispatcher = RefreshDispatcher(lambda _job: None, on_success=lambda job: consumer.commit(job.packet))
         scheduler = LiveRerankerScheduler(consumer, dispatcher, sample_interval_ns=250_000_000)
         try:
             handler.queue.put(packet(0, 1_000_000_000))
             first = scheduler.poll(timeout_s=0)
+            deadline = threading.Event()
+            for _ in range(100):
+                if dispatcher.snapshot()["completed_total"] >= 1:
+                    break
+                deadline.wait(0.02)
             handler.queue.put(packet(1, 1_100_000_000))
             skipped = scheduler.poll(timeout_s=0)
             handler.queue.put(packet(2, 1_250_000_000))

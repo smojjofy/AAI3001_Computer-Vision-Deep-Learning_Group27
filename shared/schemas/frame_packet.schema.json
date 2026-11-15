@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://group27.local/schemas/frame_packet.schema.json",
   "title": "FramePacket metadata envelope",
-  "description": "Versioned, serialisation-safe metadata for one decoded RGB8 frame. In-process code passes the RGB buffer by reference; a transport attaches its variable-length binary plane separately.",
+  "description": "Versioned, serialisation-safe metadata for one decoded RGB8 frame. In-process code passes the RGB buffer by reference; a transport attaches its variable-length binary planes separately. The optional depth and intrinsics fields carry capture hardware extras; a source without a depth sensor omits them.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "frame_id", "source_id", "capture_timestamp_ns", "timestamp_origin", "image", "quality"],
@@ -27,6 +27,27 @@
       }
     },
     "camera": {"type": "object", "description": "Optional calibrated intrinsics and distortion metadata; define its detailed schema before using it."},
+    "intrinsics": {
+      "type": "array",
+      "description": "Optional pinhole intrinsics fx, fy, cx, cy in pixels for this image size.",
+      "items": {"type": "number"},
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "depth": {
+      "type": "object",
+      "description": "Optional capture depth plane. The values are camera-axis distance, float32, and may contain NaN for invalid samples.",
+      "additionalProperties": false,
+      "required": ["width", "height", "units", "payload_encoding", "payload_bytes"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "units": {"type": "string", "enum": ["millimetres", "metres"]},
+        "payload_encoding": {"const": "raw-float32"},
+        "payload_bytes": {"type": "integer", "minimum": 4},
+        "has_validity": {"type": "boolean", "description": "True when a matching float32 validity plane in [0, 1] travels with the depth plane."}
+      }
+    },
     "quality": {
       "type": "object",
       "additionalProperties": false,

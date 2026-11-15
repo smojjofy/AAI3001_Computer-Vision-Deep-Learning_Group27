@@ -32,6 +32,13 @@ class FramePacket:
 
     `rgb` stays as an in-process buffer. Use :meth:`metadata` when a transport
     needs the matching JSON envelope; attach pixels as a separate binary plane.
+
+    Optional capture extras:
+    - ``depth``: float32 ``[H, W]`` camera-axis distance. It may contain ``NaN``
+      for invalid samples. Sources without a depth sensor leave it as ``None``.
+    - ``depth_units``: ``"millimetres"`` or ``"metres"``. Required with depth.
+    - ``depth_validity``: optional float32 ``[H, W]`` weight in ``[0, 1]``.
+    - ``intrinsics``: ``(fx, fy, cx, cy)`` in pixels for this image size.
     """
 
     frame_id: int
@@ -42,6 +49,10 @@ class FramePacket:
     quality: FrameQuality
     received_timestamp_ns: int | None = None
     camera: dict[str, Any] | None = None
+    depth: np.ndarray | None = None
+    depth_units: str | None = None
+    depth_validity: np.ndarray | None = None
+    intrinsics: tuple[float, float, float, float] | None = None
     schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
@@ -55,6 +66,24 @@ class FramePacket:
             raise ValueError("rgb must be a uint8 array with shape [height, width, 3]")
         if self.rgb.shape[0] < 1 or self.rgb.shape[1] < 1:
             raise ValueError("rgb dimensions must be positive")
+        if self.depth is not None:
+            if self.depth.dtype != np.float32 or self.depth.shape != self.rgb.shape[:2]:
+                raise ValueError("depth must be a float32 array with shape [height, width]")
+            if self.depth_units not in ("millimetres", "metres"):
+                raise ValueError("depth_units must be 'millimetres' or 'metres' when depth is set")
+            if self.depth_validity is not None:
+                if self.depth_validity.dtype != np.float32 or self.depth_validity.shape != self.rgb.shape[:2]:
+                    raise ValueError("depth_validity must be a float32 array with shape [height, width]")
+                if (self.depth_validity < 0.0).any() or (self.depth_validity > 1.0).any():
+                    raise ValueError("depth_validity values must be in [0, 1]")
+        elif self.depth_units is not None or self.depth_validity is not None:
+            raise ValueError("depth_units and depth_validity require depth")
+        if self.intrinsics is not None:
+            fx, fy, cx, cy = self.intrinsics
+            if not all(np.isfinite(value) for value in (fx, fy, cx, cy)):
+                raise ValueError("intrinsics must be finite")
+            if fx <= 0.0 or fy <= 0.0:
+                raise ValueError("fx and fy must be positive")
 
     @property
     def width(self) -> int:
@@ -90,4 +119,15 @@ class FramePacket:
             payload["received_timestamp_ns"] = self.received_timestamp_ns
         if self.camera is not None:
             payload["camera"] = self.camera
+        if self.depth is not None:
+            payload["depth"] = {
+                "width": int(self.depth.shape[1]),
+                "height": int(self.depth.shape[0]),
+                "units": self.depth_units,
+                "payload_encoding": "raw-float32",
+                "payload_bytes": int(self.depth.nbytes),
+                "has_validity": self.depth_validity is not None,
+            }
+        if self.intrinsics is not None:
+            payload["intrinsics"] = [float(value) for value in self.intrinsics]
         return payload

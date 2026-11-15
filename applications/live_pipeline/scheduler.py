@@ -22,12 +22,18 @@ class RefreshDispatcher:
     """Run one refresh callback; retain at most one newer pending request.
 
     A pending request is replaced when a fresher refresh arrives. This class
-    bounds work submission, but does not supply a Temporal Cache or validate
-    reuse against completed reconstruction state.
+    bounds work submission. ``on_success`` runs only after the worker finishes
+    without an exception; use it to commit the retained flow reference, so a
+    failed refresh cannot authorize a later reuse.
     """
 
-    def __init__(self, worker: Callable[[RefreshJob], None]) -> None:
+    def __init__(
+        self,
+        worker: Callable[[RefreshJob], None],
+        on_success: Callable[[RefreshJob], None] | None = None,
+    ) -> None:
         self._worker = worker
+        self._on_success = on_success
         self._condition = threading.Condition()
         self._pending: RefreshJob | None = None
         self._active = False
@@ -93,6 +99,8 @@ class RefreshDispatcher:
                 self.started_total += 1
             try:
                 self._worker(job)
+                if self._on_success is not None:
+                    self._on_success(job)
             except Exception as error:
                 with self._condition:
                     self.last_error = repr(error)
