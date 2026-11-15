@@ -7,7 +7,37 @@ segmented, assigned relative depth, converted to splats, and temporally smoothed
 It is not a complete, metric 3D scan. One fixed camera cannot observe hidden
 surfaces and monocular depth has no guaranteed real-world scale.
 
-## Current implementation
+## Integrated application (final milestone)
+
+The `applications/` tree now runs the complete local pipeline:
+
+```text
+webcam / OBS frame
+  -> 100 ms candidate window with optical flow
+  -> refresh: YOLO depth + depth-threshold person mask + MediaPipe pose
+              -> native Splat Constructor -> active splat state
+  -> reuse:   screen-space flow warp of the displayed splats
+  -> browser: video, depth, pose, Gaussian splats, diagnostics
+```
+
+Run it:
+
+```powershell
+./scripts/setup_integration_env.ps1      # CUDA torch, mediapipe, ultralytics, one OpenCV wheel
+./scripts/build_splat_constructor.ps1    # native constructor + bridge DLL
+cd applications/gui; npm ci; npm run build; cd ../..
+.\.venv\Scripts\python.exe scripts\run_integration_app.py --source webcam --device 0
+```
+
+Open `http://127.0.0.1:8765/`. The full architecture, API, measured results,
+and limits are in [`docs/integration.md`](docs/integration.md).
+
+Verified on this computer (RTX 4050 Laptop): warm refresh 51 ms, person mask
+from depth threshold covers the subject, and the browser renders the live splat
+state at about 150 FPS with reuse warping enabled. See
+`applications/gui/screenshots/` for evidence.
+
+## Component slices
 
 The first vertical slice, `modules/stream_handler`, is implemented:
 

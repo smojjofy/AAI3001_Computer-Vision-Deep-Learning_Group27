@@ -263,9 +263,14 @@ def construction_frame_from_refresh(
     if pose.shape != (4, 4):
         raise ValueError("camera_to_world must be a 4x4 matrix")
 
+    # The constructor contract requires a positive timestamp. A recorded source
+    # can start its presentation clock at 0. The original capture time stays in
+    # diagnostics and identity; only the constructor boundary is clamped.
+    constructor_timestamp_ns = max(1, int(timestamp_ns))
+
     return ConstructionFrame(
         frame_id=frame_id_string(int(frame_id)),
-        timestamp_ns=int(timestamp_ns),
+        timestamp_ns=constructor_timestamp_ns,
         source_id=str(source_id),
         rgb=np.ascontiguousarray(rgb),
         depth=np.ascontiguousarray(safe_depth),

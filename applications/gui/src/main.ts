@@ -1,23 +1,28 @@
 import './style.css'
 
-import { InferencePanel } from './components/InferencePanel'
-import { createMockPipelineFrame } from './data/mockPipelineFrame'
-import { OriginalInputPanel } from './components/OriginalInputPanel'
+import {
+  decodeJpegBase64,
+  fetchDiagnostics,
+  fetchMask,
+  fetchMotion,
+  fetchPoseDepth,
+  fetchPreview,
+  fetchSplat,
+} from './api/liveApi'
+
 import { FrameProcessorPanel } from './components/FrameProcessorPanel'
+import { InferencePanel } from './components/InferencePanel'
+import { OriginalInputPanel } from './components/OriginalInputPanel'
 import { SplatOutputPanel } from './components/SplatOutputPanel'
 
+import type {
+  DiagnosticsPayload,
+  MotionPayload,
+  PoseDepthFrame,
+} from './api/types'
 
-interface PreviewFrame {
-  schema_version: '1.0'
-  frame_id: number
-  source_id: string
-  capture_timestamp_ns: string
-  timestamp_origin: 'source_presentation' | 'decode_monotonic'
-  width: number
-  height: number
-  jpeg_base64: string
-  stream_health: 'closed' | 'connecting' | 'healthy' | 'reconnecting' | 'stalled'
-}
+const PREVIEW_POLL_MS = 100
+const STATE_POLL_MS = 300
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
@@ -30,7 +35,7 @@ app.innerHTML = `
     <header class="top-bar">
       <div>
         <h1>Real-Time 2.5D Reconstruction Viewer</h1>
-        <p>Single Camera Pipeline</p>
+        <p>Single Camera Pipeline · live local API</p>
       </div>
       <div class="status" id="capture-status">
         <span class="status-dot"></span>
@@ -52,106 +57,266 @@ if (!viewerGrid || !status || !statusLabel) {
 const originalInputPanel = new OriginalInputPanel()
 viewerGrid.appendChild(originalInputPanel.getElement())
 
-const mockFrame =
-  createMockPipelineFrame(
-    1,
-    'mock-camera',
-    '0'
-  )
+const frameProcessorPanel = new FrameProcessorPanel()
+viewerGrid.appendChild(frameProcessorPanel.getElement())
 
-// These panels remain fixture-driven until their own backends are connected.
-const frameProcessorPanel =
-  new FrameProcessorPanel()
+const inferencePanel = new InferencePanel()
+viewerGrid.appendChild(inferencePanel.getElement())
 
-viewerGrid.appendChild(
-  frameProcessorPanel.getElement()
-)
+const splatOutputPanel = new SplatOutputPanel()
+viewerGrid.appendChild(splatOutputPanel.getElement())
 
-frameProcessorPanel.setProcessorData(
-  mockFrame.processor
-)
+type PreviewState = 'unknown' | 'live' | 'waiting' | 'disconnected'
 
-const inferencePanel =
-  new InferencePanel()
+let previewState: PreviewState = 'unknown'
+let previewHealth = 'unknown'
+let pipelineHealth = 'unknown'
 
-viewerGrid.appendChild(
-  inferencePanel.getElement()
-)
+let previousPreviewFrameId: number | null = null
+let previousSourceId: string | null = null
+let previousTimestampOrigin: string | null = null
+let firstCaptureNs: bigint | null = null
 
-const splatOutputPanel =
-  new SplatOutputPanel()
+let lastSplatFrameRequested: string | null = null
+let splatFetchInFlight = false
 
-viewerGrid.appendChild(
-  splatOutputPanel.getElement()
-)
-inferencePanel.setInferenceData(
-  mockFrame.inference
-)
+let lastMaskRefreshCount = -1
+let maskFetchInFlight = false
 
-splatOutputPanel.setSplatData(
-  mockFrame.splat,
-  mockFrame.frameId,
-)
+let lastMotionFrameId: number | null = null
+let activeMotion: MotionPayload | null = null
+let lastPoseDepthFrameId: number | null = null
+let poseDepthFetchInFlight = false
 
-function showStatus(label: string, live: boolean): void {
+function applyStatus(): void {
+  let label = 'WAITING FOR INPUT'
+  let live = false
+
+  if (previewState === 'disconnected') {
+    label = 'PREVIEW DISCONNECTED'
+  } else if (previewHealth === 'closed' || pipelineHealth === 'closed') {
+    label = 'CAMERA CLOSED'
+  } else if (previewHealth === 'stalled' || previewHealth === 'reconnecting') {
+    label = previewHealth.toUpperCase()
+  } else if (previewState === 'live') {
+    label = 'LIVE'
+    live = true
+  }
+
   statusLabel!.textContent = label
   status!.classList.toggle('is-live', live)
 }
 
-let previousFrameId: number | null = null
-let previousSourceId: string | null = null
-let firstCaptureNs: bigint | null = null
-let previousOrigin: string | null = null
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`
+  }
+  return String(error)
+}
 
 async function pollPreview(): Promise<void> {
-  try {
-    const response = await fetch('/api/preview', { cache: 'no-store' })
-    if (response.status === 204) {
-      const health = response.headers.get('X-Stream-Health')
-      showStatus(health === 'closed' ? 'CAMERA CLOSED' : 'WAITING FOR INPUT', false)
-      originalInputPanel.showWaiting(health === 'closed' ? 'Camera could not open or capture ended' : 'Waiting for camera frames')
-      return
-    }
-    if (!response.ok) {
-      throw new Error(`Preview HTTP ${response.status}`)
-    }
+  const result = await fetchPreview()
 
-    const frame = await response.json() as PreviewFrame
-    if (frame.schema_version !== '1.0') {
-      throw new Error('Unsupported preview frame version')
-    }
+  if (result.kind === 'ok') {
+    const frame = result.data
+    previewHealth = frame.stream_health
+
     if (frame.stream_health !== 'healthy') {
-      showStatus(frame.stream_health.toUpperCase(), false)
+      previewState = 'waiting'
       originalInputPanel.showWaiting(`Camera ${frame.stream_health}`)
+      frameProcessorPanel.showPreviewWaiting(`Camera ${frame.stream_health}`)
+      applyStatus()
+      window.setTimeout(() => {
+        void pollPreview()
+      }, PREVIEW_POLL_MS)
       return
     }
 
-    showStatus('LIVE INPUT', true)
-    if (frame.frame_id === previousFrameId && frame.source_id === previousSourceId) {
-      return
-    }
-    const captureNs = BigInt(frame.capture_timestamp_ns)
-    if (frame.source_id !== previousSourceId || frame.timestamp_origin !== previousOrigin || firstCaptureNs === null) {
-      firstCaptureNs = captureNs
-    }
+    previewState = 'live'
+    const sourceChanged = frame.source_id !== previousSourceId
+    const isNewFrame =
+      frame.frame_id !== previousPreviewFrameId || sourceChanged
 
-    const image = new Image()
-    image.src = `data:image/jpeg;base64,${frame.jpeg_base64}`
-    await image.decode()
-    originalInputPanel.showImage(image, frame.width, frame.height, {
-      frameId: frame.frame_id,
-      sourceId: frame.source_id,
-      timestamp: `Capture +${(Number(captureNs - firstCaptureNs) / 1_000_000_000).toFixed(2)} s`,
-    })
-    previousFrameId = frame.frame_id
-    previousSourceId = frame.source_id
-    previousOrigin = frame.timestamp_origin
-  } catch {
-    showStatus('PREVIEW DISCONNECTED', false)
-    originalInputPanel.showWaiting('Start the Python preview server')
+    if (isNewFrame) {
+      previousPreviewFrameId = frame.frame_id
+      previousSourceId = frame.source_id
+
+      const captureNs = BigInt(frame.capture_timestamp_ns)
+      if (
+        firstCaptureNs === null ||
+        sourceChanged ||
+        frame.timestamp_origin !== previousTimestampOrigin
+      ) {
+        firstCaptureNs = captureNs
+      }
+      previousTimestampOrigin = frame.timestamp_origin
+      const timestamp = `Capture +${(
+        Number(captureNs - firstCaptureNs) / 1_000_000_000
+      ).toFixed(2)} s`
+
+      try {
+        const image = await decodeJpegBase64(frame.jpeg_base64)
+        const meta = {
+          frameId: frame.frame_id,
+          sourceId: frame.source_id,
+          timestamp,
+        }
+        originalInputPanel.showImage(image, frame.width, frame.height, meta)
+        frameProcessorPanel.setPreviewFrame(image, meta)
+      } catch (error) {
+        const message = `Preview decode failed: ${describeError(error)}`
+        originalInputPanel.showWaiting(message)
+        frameProcessorPanel.showPreviewWaiting(message)
+      }
+    }
+  } else if (result.kind === 'empty') {
+    previewState = 'waiting'
+    originalInputPanel.showWaiting('Waiting for camera frames')
+    frameProcessorPanel.showPreviewWaiting('Waiting for the camera preview')
+  } else {
+    previewState = 'disconnected'
+    originalInputPanel.showWaiting(
+      'Start the pipeline server on 127.0.0.1:8765',
+    )
+    frameProcessorPanel.showPreviewWaiting('Preview disconnected')
+  }
+
+  applyStatus()
+  window.setTimeout(() => {
+    void pollPreview()
+  }, PREVIEW_POLL_MS)
+}
+
+async function refreshSplat(frameId: string): Promise<void> {
+  if (splatFetchInFlight) {
+    return
+  }
+  splatFetchInFlight = true
+  try {
+    const result = await fetchSplat()
+    if (result.kind === 'ok') {
+      splatOutputPanel.setSplatFrame(result.data)
+      // Keep the reuse warp only while it is newer than this splat state.
+      // A refresh always replaces the motion payload with 204, which clears it.
+      if (
+        activeMotion !== null &&
+        Number(result.data.header.frame_id) >= activeMotion.frame_id
+      ) {
+        activeMotion = null
+        splatOutputPanel.setMotionWarp(null)
+      }
+    } else if (result.kind === 'empty') {
+      lastSplatFrameRequested = null
+    } else {
+      console.warn(`Splat fetch failed: ${result.error}`)
+      lastSplatFrameRequested = null
+    }
+  } catch (error) {
+    console.warn(`Splat frame ${frameId} could not be rendered: ${describeError(error)}`)
+    lastSplatFrameRequested = null
   } finally {
-    window.setTimeout(pollPreview, 100)
+    splatFetchInFlight = false
   }
 }
 
+async function refreshMask(refreshCount: number): Promise<void> {
+  if (maskFetchInFlight) {
+    return
+  }
+  maskFetchInFlight = true
+  try {
+    const result = await fetchMask()
+    if (result.kind === 'ok') {
+      frameProcessorPanel.setMaskImage(result.data, { refreshCount })
+    } else {
+      frameProcessorPanel.setMaskImage(null, null)
+    }
+  } finally {
+    maskFetchInFlight = false
+  }
+}
+
+async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
+  if (poseDepthFetchInFlight) {
+    return
+  }
+  poseDepthFetchInFlight = true
+  try {
+    const image = await decodeJpegBase64(poseDepth.depth_jpeg_base64)
+    frameProcessorPanel.setDepthFrame(image, poseDepth)
+  } catch {
+    frameProcessorPanel.setDepthFrame(null, poseDepth)
+  } finally {
+    poseDepthFetchInFlight = false
+  }
+}
+
+function hasDiagnostics(payload: DiagnosticsPayload): boolean {
+  return typeof payload.refresh_count === 'number'
+}
+
+async function pollState(): Promise<void> {
+  const [diagnosticsResult, motionResult, poseDepthResult] = await Promise.all([
+    fetchDiagnostics(),
+    fetchMotion(),
+    fetchPoseDepth(),
+  ])
+
+  if (diagnosticsResult.kind === 'ok' && hasDiagnostics(diagnosticsResult.data)) {
+    const diagnostics = diagnosticsResult.data
+    pipelineHealth = diagnostics.stream_health
+    inferencePanel.update(diagnostics)
+
+    const splatFrameId = diagnostics.splat?.frame_id ?? null
+    if (splatFrameId !== null && splatFrameId !== lastSplatFrameRequested) {
+      lastSplatFrameRequested = splatFrameId
+      void refreshSplat(splatFrameId)
+    }
+    if (
+      diagnostics.refresh_count !== lastMaskRefreshCount &&
+      diagnostics.refresh_count > 0
+    ) {
+      lastMaskRefreshCount = diagnostics.refresh_count
+      void refreshMask(diagnostics.refresh_count)
+    }
+  } else {
+    inferencePanel.update(null)
+    pipelineHealth =
+      diagnosticsResult.kind === 'error' ? 'disconnected' : 'waiting'
+  }
+
+  if (motionResult.kind === 'ok') {
+    const motion = motionResult.data
+    if (motion.frame_id !== lastMotionFrameId) {
+      lastMotionFrameId = motion.frame_id
+      activeMotion = motion
+      frameProcessorPanel.setMotion(motion)
+      splatOutputPanel.setMotionWarp(motion)
+    }
+  } else if (lastMotionFrameId !== null) {
+    // 204: the refresh path replaced the reuse state, so clear the warp.
+    lastMotionFrameId = null
+    activeMotion = null
+    frameProcessorPanel.setMotion(null)
+    splatOutputPanel.setMotionWarp(null)
+  }
+
+  if (poseDepthResult.kind === 'ok') {
+    const poseDepth = poseDepthResult.data
+    if (poseDepth.frame_id !== lastPoseDepthFrameId) {
+      lastPoseDepthFrameId = poseDepth.frame_id
+      void refreshPoseDepth(poseDepth)
+    }
+  } else if (poseDepthResult.kind === 'empty' && lastPoseDepthFrameId !== null) {
+    lastPoseDepthFrameId = null
+    frameProcessorPanel.setDepthFrame(null, null)
+  }
+
+  applyStatus()
+  window.setTimeout(() => {
+    void pollState()
+  }, STATE_POLL_MS)
+}
+
 void pollPreview()
+void pollState()

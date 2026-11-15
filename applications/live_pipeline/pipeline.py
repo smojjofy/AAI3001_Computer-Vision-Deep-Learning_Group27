@@ -200,6 +200,8 @@ class RefreshPipeline:
             "total": (perf_counter() - started) * 1000.0,
         }
         header["timings_ms"] = {key: round(value, 2) for key, value in timings.items()}
+        header["image_width"] = int(packet.width)
+        header["image_height"] = int(packet.height)
         header["pose_confidence"] = round(pose_confidence, 3)
         header["person_detected"] = bool(result.detected)
         header["mask"] = {

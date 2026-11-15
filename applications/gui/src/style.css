@@ -37,8 +37,8 @@ input {
 .top-bar {
   flex-shrink: 0;
 
-  min-height: 78px;
-  padding: 16px 24px;
+  min-height: 74px;
+  padding: 14px 22px;
   border-bottom: 1px solid #2a2f3a;
 
   display: flex;
@@ -50,14 +50,14 @@ input {
 
 .top-bar h1 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.2rem;
   font-weight: 600;
 }
 
 .top-bar p {
   margin: 4px 0 0;
   color: #9299a6;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
 }
 
 .status {
@@ -80,6 +80,7 @@ input {
 
 .status.is-live .status-dot {
   background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
 }
 
 .viewer-grid {
@@ -87,7 +88,8 @@ input {
   min-height: 0;
 
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
 
   gap: 1px;
   background: #2a2f3a;
@@ -102,23 +104,45 @@ input {
   display: flex;
   flex-direction: column;
 
+  overflow: hidden;
+
   background: #11141b;
 }
 
 .panel-header {
-  height: 52px;
-  padding: 0 18px;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 16px;
 
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 
   border-bottom: 1px solid #2a2f3a;
 }
 
 .panel-header h2 {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   font-weight: 600;
+}
+
+.panel-note {
+  color: #8b93a1;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.panel-note.is-live {
+  color: #22c55e;
+}
+
+.panel-note.is-error {
+  color: #f87171;
 }
 
 .viewer-content {
@@ -129,7 +153,7 @@ input {
   align-items: center;
   justify-content: center;
 
-  padding: 18px;
+  padding: 14px;
 
   overflow: hidden;
 }
@@ -137,11 +161,14 @@ input {
 .placeholder {
   width: 100%;
   height: 100%;
-  min-height: 420px;
+  min-height: 0;
 
   display: flex;
   align-items: center;
   justify-content: center;
+
+  padding: 14px;
+  text-align: center;
 
   border: 1px dashed #3a414d;
   border-radius: 8px;
@@ -149,38 +176,35 @@ input {
   background: #171b23;
   color: #707785;
 
-  font-size: 0.9rem;
+  font-size: 0.82rem;
 }
 
 .panel-footer {
   flex-shrink: 0;
-  min-height: 46px;
-  padding: 0 18px;
+  min-height: 40px;
+  padding: 0 16px;
 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 
   border-top: 1px solid #2a2f3a;
 
   color: #9299a6;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
 }
 
-@media (max-width: 1000px) {
-  .viewer-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .viewer-content {
-    min-height: 360px;
-  }
-
-  .placeholder {
-    min-height: 300px;
-  }
+.panel-footer span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* ------------------------------------------------------------------ */
+/* Original Input                                                     */
+/* ------------------------------------------------------------------ */
+
 .media-container {
   position: relative;
 
@@ -218,21 +242,27 @@ input {
 
   border: none;
 }
+
+/* ------------------------------------------------------------------ */
+/* Frame Processor Output                                             */
+/* ------------------------------------------------------------------ */
+
 .processor-content {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  gap: 12px;
+  gap: 10px;
 }
 
 .processor-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .processor-tab {
-  padding: 6px 10px;
+  padding: 5px 10px;
 
   border: 1px solid #343b47;
   border-radius: 6px;
@@ -240,7 +270,7 @@ input {
   background: #171b23;
   color: #9299a6;
 
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 500;
 
   cursor: pointer;
@@ -302,8 +332,95 @@ input {
 
   border: none;
 }
+
+.processor-footer {
+  font-size: 0.7rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Inference Diagnostics                                              */
+/* ------------------------------------------------------------------ */
+
+.diagnostics-content {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 10px 12px;
+  overflow-y: auto;
+}
+
+.diagnostics {
+  width: 100%;
+
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 8px;
+}
+
+.diag-section {
+  padding: 5px 10px 6px;
+
+  border: 1px solid #262c36;
+  border-radius: 8px;
+
+  background: #141821;
+}
+
+.diag-section h3 {
+  margin: 0 0 4px;
+
+  color: #7c8595;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.diag-row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 8px;
+
+  padding: 1px 0;
+
+  font-size: 0.66rem;
+  line-height: 1.25;
+}
+
+.diag-label {
+  color: #7c8595;
+}
+
+.diag-value {
+  color: #e5e7eb;
+
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  overflow-wrap: anywhere;
+}
+
+.diag-value.is-good {
+  color: #34d399;
+}
+
+.diag-value.is-warn {
+  color: #fbbf24;
+}
+
+.diag-value.is-error {
+  color: #f87171;
+}
+
+.inference-footer-item {
+  font-size: 0.68rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Splat Constructor Output                                           */
+/* ------------------------------------------------------------------ */
+
 .splat-content {
-  padding: 18px;
+  padding: 14px;
 }
 
 .splat-viewport {
@@ -328,13 +445,50 @@ input {
   height: 100%;
 }
 
+.splat-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+
+  width: 100%;
+  height: 100%;
+
+  border: none;
+
+  background: rgba(9, 11, 16, 0.88);
+}
+
+.splat-status {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 4;
+
+  padding: 4px 8px;
+
+  border: 1px solid rgba(120, 170, 255, 0.28);
+  border-radius: 6px;
+
+  background: rgba(8, 12, 20, 0.76);
+  color: #cfe3ff;
+
+  font: 11px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  pointer-events: none;
+}
+
+.splat-status.is-error {
+  border-color: rgba(255, 96, 96, 0.6);
+  color: #ffb4b4;
+}
+
 .reset-view-button {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 10;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
 
-  padding: 7px 11px;
+  padding: 6px 10px;
 
   border: 1px solid #3a414d;
   border-radius: 6px;
@@ -342,7 +496,7 @@ input {
   background: rgba(23, 27, 35, 0.9);
   color: #d7dae0;
 
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 500;
 
   cursor: pointer;
@@ -351,4 +505,31 @@ input {
 .reset-view-button:hover {
   background: #252b35;
   color: #ffffff;
+}
+
+.splat-footer {
+  font-size: 0.7rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Narrow screens                                                     */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 1000px) {
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .viewer-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-auto-rows: minmax(320px, auto);
+    overflow: visible;
+  }
+
+  .diagnostics-content {
+    max-height: 60vh;
+  }
 }

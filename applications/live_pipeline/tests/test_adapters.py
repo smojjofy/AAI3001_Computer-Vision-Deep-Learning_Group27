@@ -148,6 +148,22 @@ def test_construction_frame_rejects_misaligned_inputs() -> None:
         )
 
 
+def test_construction_frame_clamps_zero_replay_timestamp() -> None:
+    rgb = np.zeros((60, 80, 3), np.uint8)
+    depth = synthetic_depth()
+    mask = np.zeros((60, 80), np.uint8)
+    mask[15:50, 25:55] = 1
+    frame = construction_frame_from_refresh(
+        rgb=rgb,
+        depth_m=depth,
+        foreground_mask=mask,
+        frame_id=1,
+        timestamp_ns=0,
+        source_id="video:replay",
+    )
+    assert frame.timestamp_ns == 1
+
+
 def test_splat_state_native_round_trip() -> None:
     if not default_library_path().is_file():
         pytest.skip("native constructor is not built")
