@@ -313,7 +313,6 @@ export class SplatOutputPanel {
     this.sourcePixels = frame.sourcePixels
     this.splatCount = count
     this.displayAlpha = alpha
-    this.lossAnchorMs = null
 
     const descriptor: SplatDescriptor = {
       basePositions,

@@ -19,6 +19,7 @@ import type {
   DiagnosticsPayload,
   MotionPayload,
   PoseDepthFrame,
+  SplatHeader,
 } from './api/types'
 
 const PREVIEW_POLL_MS = 100
@@ -77,33 +78,46 @@ let previousSourceId: string | null = null
 let previousTimestampOrigin: string | null = null
 let firstCaptureNs: bigint | null = null
 
-// Fetch gating. A requested id is recorded only when its fetch actually
-// starts. If a newer id arrives while a fetch is running, it is kept as
-// pending and fetched when the current one finishes, so no state is skipped.
-// The rendered id is taken from the response, because /api/splat always
-// returns the latest state and may differ from the requested id.
-let splatRenderedFrameId: string | null = null
-let splatPendingFrameId: string | null = null
+// Fetch gating. Identity is the complete (source, generation, frame) tuple,
+// because a source or process restart can reuse a frame id. A requested id is
+// recorded only when its fetch starts; a newer id waits and is fetched when the
+// current fetch ends. A failed fetch retries the same identity after 500 ms.
+let splatRenderedKey: string | null = null
+let splatPendingKey: string | null = null
 let splatFetchInFlight = false
 let splatRetryAt = 0
+let splatRetryTimer: number | null = null
 
-let maskRenderedCount = -1
+let maskRenderedKey: string | null = null
+let maskPendingKey: string | null = null
 let maskPendingCount: number | null = null
+let lastMaskRefreshCount = -1
 let maskFetchInFlight = false
 let maskRetryAt = 0
+let maskRetryTimer: number | null = null
 
 let lastMotionFrameId: number | null = null
 let activeMotion: MotionPayload | null = null
-let poseDepthRenderedFrameId: number | null = null
-let poseDepthPendingFrameId: number | null = null
+
+let poseDepthRenderedKey: string | null = null
+let poseDepthPending: PoseDepthFrame | null = null
 let poseDepthFetchInFlight = false
 let poseDepthRetryAt = 0
+let poseDepthRetryTimer: number | null = null
 
 /**
  * Viewer-clock anchor for the server's latched invalid-person age.
  * The panel holds the last valid state for 500 ms, then fades it over 500 ms.
+ * The clock is released only when a state that is new for the loss generation
+ * has been installed.
  */
 let personLossAnchorMs: number | null = null
+let personLossGeneration: number | null = null
+let personLossLastFrameId = 0
+
+/** Identity of the splat state currently shown in the panel. */
+let splatRenderedGeneration = 0
+let splatRenderedFrameInt = 0
 
 function applyStatus(): void {
   let label = 'WAITING FOR INPUT'
@@ -204,118 +218,214 @@ async function pollPreview(): Promise<void> {
   }, PREVIEW_POLL_MS)
 }
 
-async function refreshSplat(frameId: string): Promise<void> {
+/** Identity key for one splat or pose-depth state. Frame id alone is not enough. */
+function splatKey(sourceId: string, generation: number, frameId: number | string): string {
+  return `${sourceId}|${generation}|${frameId}`
+}
+
+function poseKey(pose: PoseDepthFrame): string {
+  const generation = Number((pose as PoseDepthFrame & { generation?: number }).generation ?? 0)
+  return splatKey(pose.source_id, generation, pose.frame_id)
+}
+
+async function refreshSplat(key: string): Promise<void> {
   if (splatFetchInFlight) {
-    // Keep the newest request; it is fetched when the current fetch ends.
-    splatPendingFrameId = frameId
+    splatPendingKey = key
     return
   }
   if (performance.now() < splatRetryAt) {
-    splatPendingFrameId = frameId
+    splatPendingKey = key
+    scheduleSplatRetry()
     return
   }
   splatFetchInFlight = true
-  splatPendingFrameId = null
+  splatPendingKey = null
   try {
     const result = await fetchSplat()
     if (result.kind === 'ok') {
-      // Record the identity that actually arrived, not the one requested.
-      const rendered = String(result.data.header.frame_id)
-      splatRenderedFrameId = rendered
+      const header = result.data.header
+      const rendered = splatKey(
+        header.source_id,
+        Number(header.generation ?? 0),
+        header.frame_id,
+      )
+      splatRenderedKey = rendered
+      splatRenderedGeneration = Number(header.generation ?? 0)
+      splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
       splatOutputPanel.setSplatFrame(result.data)
-      // A refresh clears the motion payload; clear the warp when this state is
-      // at least as new as the active motion (the panel also checks identity).
-      if (
-        activeMotion !== null &&
-        Number(rendered) >= activeMotion.frame_id
-      ) {
+      // Release the loss clock only when a state that is new for this run has
+      // actually been installed. Clearing it from diagnostics would let the old
+      // splats regain full alpha before the new state arrives.
+      releasePersonLossIfNewState(header)
+      if (activeMotion !== null && Number(header.frame_id) >= activeMotion.frame_id) {
         activeMotion = null
         splatOutputPanel.setMotionWarp(null)
       }
       splatRetryAt = 0
     } else if (result.kind === 'empty') {
-      splatRenderedFrameId = null
+      splatRenderedKey = null
     } else {
       console.warn(`Splat fetch failed: ${result.error}`)
       splatRetryAt = performance.now() + 500
+      splatPendingKey = key
+      scheduleSplatRetry()
     }
   } catch (error) {
-    console.warn(`Splat frame ${frameId} could not be rendered: ${describeError(error)}`)
+    console.warn(`Splat ${key} could not be rendered: ${describeError(error)}`)
     splatRetryAt = performance.now() + 500
+    splatPendingKey = key
+    scheduleSplatRetry()
   } finally {
     splatFetchInFlight = false
   }
-  const next = splatPendingFrameId
-  if (next !== null && next !== splatRenderedFrameId) {
-    splatPendingFrameId = null
+  const next = splatPendingKey
+  if (next !== null && next !== splatRenderedKey) {
+    splatPendingKey = null
     void refreshSplat(next)
   }
 }
 
-async function refreshMask(refreshCount: number): Promise<void> {
+/** Fetch the pending splat identity when the retry delay ends. */
+function scheduleSplatRetry(): void {
+  if (splatRetryTimer !== null) {
+    return
+  }
+  splatRetryTimer = window.setTimeout(() => {
+    splatRetryTimer = null
+    const pending = splatPendingKey
+    if (pending !== null && !splatFetchInFlight) {
+      splatPendingKey = null
+      void refreshSplat(pending)
+    }
+  }, 500)
+}
+
+async function refreshMask(key: string, refreshCount: number): Promise<void> {
   if (maskFetchInFlight) {
+    maskPendingKey = key
     maskPendingCount = refreshCount
     return
   }
   if (performance.now() < maskRetryAt) {
+    maskPendingKey = key
     maskPendingCount = refreshCount
+    scheduleMaskRetry()
     return
   }
   maskFetchInFlight = true
+  const requested = key
+  maskPendingKey = null
   maskPendingCount = null
   try {
     const result = await fetchMask()
     if (result.kind === 'ok') {
-      maskRenderedCount = refreshCount
+      maskRenderedKey = requested
       frameProcessorPanel.setMaskImage(result.data, { refreshCount })
       maskRetryAt = 0
     } else {
       frameProcessorPanel.setMaskImage(null, null)
       maskRetryAt = performance.now() + 500
+      maskPendingKey = requested
+      maskPendingCount = refreshCount
+      scheduleMaskRetry()
     }
   } finally {
     maskFetchInFlight = false
   }
-  const next = maskPendingCount
-  if (next !== null && next !== maskRenderedCount) {
+  const next = maskPendingKey
+  if (next !== null && next !== maskRenderedKey) {
+    const nextCount = maskPendingCount ?? refreshCount
+    maskPendingKey = null
     maskPendingCount = null
-    void refreshMask(next)
+    void refreshMask(next, nextCount)
   }
+}
+
+function scheduleMaskRetry(): void {
+  if (maskRetryTimer !== null) {
+    return
+  }
+  maskRetryTimer = window.setTimeout(() => {
+    maskRetryTimer = null
+    const pending = maskPendingKey
+    if (pending !== null && !maskFetchInFlight) {
+      const count = maskPendingCount ?? lastMaskRefreshCount
+      maskPendingKey = null
+      maskPendingCount = null
+      void refreshMask(pending, count)
+    }
+  }, 500)
 }
 
 async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
   if (poseDepthFetchInFlight) {
-    poseDepthPendingFrameId = poseDepth.frame_id
+    poseDepthPending = poseDepth
     return
   }
   if (performance.now() < poseDepthRetryAt) {
-    poseDepthPendingFrameId = poseDepth.frame_id
+    poseDepthPending = poseDepth
+    schedulePoseDepthRetry()
     return
   }
   poseDepthFetchInFlight = true
-  poseDepthPendingFrameId = null
+  poseDepthPending = null
   try {
     const image = await decodeJpegBase64(poseDepth.depth_jpeg_base64)
-    poseDepthRenderedFrameId = poseDepth.frame_id
+    poseDepthRenderedKey = poseKey(poseDepth)
     frameProcessorPanel.setDepthFrame(image, poseDepth)
     poseDepthRetryAt = 0
   } catch {
     frameProcessorPanel.setDepthFrame(null, poseDepth)
     poseDepthRetryAt = performance.now() + 500
+    poseDepthPending = poseDepth
+    schedulePoseDepthRetry()
   } finally {
     poseDepthFetchInFlight = false
   }
-  const next = poseDepthPendingFrameId
-  if (next !== null && next !== poseDepthRenderedFrameId) {
-    poseDepthPendingFrameId = null
+  const next = poseDepthPending
+  if (next !== null && poseKey(next) !== poseDepthRenderedKey) {
+    poseDepthPending = null
+    void refreshPoseDepth(next)
+  }
+}
+
+function schedulePoseDepthRetry(): void {
+  if (poseDepthRetryTimer !== null) {
+    return
+  }
+  poseDepthRetryTimer = window.setTimeout(() => {
+    poseDepthRetryTimer = null
+    const pending = poseDepthPending
+    if (pending !== null && !poseDepthFetchInFlight) {
+      poseDepthPending = null
+      void refreshPoseDepth(pending)
+    }
+  }, 500)
+}
+
+/** Release the viewer loss clock only after a new state for this run is shown. */
+function releasePersonLossIfNewState(header: SplatHeader): void {
+  if (personLossAnchorMs === null) {
+    return
+  }
+  const generation = Number(header.generation ?? 0)
+  const frameId = Number(header.frame_id_int ?? header.frame_id)
+  if (
+    personLossGeneration === null ||
+    generation !== personLossGeneration ||
+    frameId > personLossLastFrameId
+  ) {
+    personLossAnchorMs = null
+    personLossGeneration = null
+    splatOutputPanel.setPersonLoss(null)
   }
 }
 
 /** Anchor the server's latched person-loss age on the viewer clock. */
 function schedulePersonLoss(ageMs: number | null): void {
   if (ageMs === null) {
-    personLossAnchorMs = null
-    splatOutputPanel.setPersonLoss(null)
+    // Do not clear here. releasePersonLossIfNewState owns the release so the
+    // old splats cannot regain full alpha before the new state is displayed.
     return
   }
   const now = performance.now()
@@ -324,6 +434,8 @@ function schedulePersonLoss(ageMs: number | null): void {
   if (personLossAnchorMs === null || ageMs < currentAge - 50) {
     // First loss, or the server latch restarted after a recovery.
     personLossAnchorMs = now - Math.max(0, ageMs)
+    personLossGeneration = splatRenderedGeneration
+    personLossLastFrameId = splatRenderedFrameInt
   }
   splatOutputPanel.setPersonLoss(now - personLossAnchorMs)
 }
@@ -350,22 +462,31 @@ async function pollState(): Promise<void> {
     inferencePanel.update(diagnostics)
 
     const splatFrameId = diagnostics.splat?.frame_id ?? null
-    if (
-      splatFrameId !== null &&
-      splatFrameId !== splatRenderedFrameId &&
-      splatFrameId !== splatPendingFrameId
-    ) {
-      void refreshSplat(splatFrameId)
+    const activeIdentity = diagnostics.active_identity ?? null
+    if (splatFrameId !== null && activeIdentity !== null) {
+      const key = splatKey(
+        activeIdentity.source_id,
+        activeIdentity.generation,
+        splatFrameId,
+      )
+      if (key !== splatRenderedKey && key !== splatPendingKey) {
+        void refreshSplat(key)
+      }
+      if (diagnostics.refresh_count > 0) {
+        const maskKey = splatKey(
+          activeIdentity.source_id,
+          activeIdentity.generation,
+          diagnostics.refresh_count,
+        )
+        if (maskKey !== maskRenderedKey && maskKey !== maskPendingKey) {
+          lastMaskRefreshCount = diagnostics.refresh_count
+          void refreshMask(maskKey, diagnostics.refresh_count)
+        }
+      }
     }
-    if (
-      diagnostics.refresh_count !== maskRenderedCount &&
-      diagnostics.refresh_count !== maskPendingCount &&
-      diagnostics.refresh_count > 0
-    ) {
-      void refreshMask(diagnostics.refresh_count)
-    }
-    // Server-latched invalid-person age. Anchor it once on the viewer clock;
-    // the browser then runs the 500 ms hold and 500 ms fade without refetching.
+    // The server latches the invalid-person event. Anchor it once on the
+    // viewer clock; the browser then owns the hold and fade. Do not clear the
+    // clock from a null age: the old splats would regain full alpha too early.
     schedulePersonLoss(diagnostics.person_loss_age_ms ?? null)
   } else {
     inferencePanel.update(null)
@@ -392,14 +513,13 @@ async function pollState(): Promise<void> {
 
   if (poseDepthResult.kind === 'ok') {
     const poseDepth = poseDepthResult.data
-    if (
-      poseDepth.frame_id !== poseDepthRenderedFrameId &&
-      poseDepth.frame_id !== poseDepthPendingFrameId
-    ) {
+    const key = poseKey(poseDepth)
+    const pendingKey = poseDepthPending === null ? null : poseKey(poseDepthPending)
+    if (key !== poseDepthRenderedKey && key !== pendingKey) {
       void refreshPoseDepth(poseDepth)
     }
-  } else if (poseDepthResult.kind === 'empty' && poseDepthRenderedFrameId !== null) {
-    poseDepthRenderedFrameId = null
+  } else if (poseDepthResult.kind === 'empty' && poseDepthRenderedKey !== null) {
+    poseDepthRenderedKey = null
     frameProcessorPanel.setDepthFrame(null, null)
   }
 

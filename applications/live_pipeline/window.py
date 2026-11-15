@@ -226,8 +226,20 @@ class WindowSelector:
             return WindowDecision("refresh", "reference_expired", best, len(candidates), first.capture_timestamp_ns, candidates[-1].capture_timestamp_ns, forced=True)
         return WindowDecision("reuse", "not_significant", best, len(candidates), first.capture_timestamp_ns, candidates[-1].capture_timestamp_ns)
 
-    def commit(self, packet) -> None:
-        """Retain ``packet`` after its refresh produced a valid active state."""
+    def commit(self, packet, generation: int | None = None) -> bool:
+        """Retain ``packet`` after its refresh produced a valid active state.
+
+        ``generation`` is the capture run of the refresh job. A stale commit from
+        an earlier run is rejected, so a slow refresh can never become the
+        reference of a newer run. Returns True when the commit was applied.
+        """
+        if generation is not None and int(generation) != self.generation:
+            return False
         self.reference = RetainedReference.copy_of(packet, generation=self.generation)
         self.active_state_capture_ns = int(packet.capture_timestamp_ns)
         self.active_state_frame_id = int(packet.frame_id)
+        return True
+
+    def candidate_is_current(self, candidate: Candidate) -> bool:
+        """True when the candidate belongs to the current capture run."""
+        return candidate.generation == self.generation

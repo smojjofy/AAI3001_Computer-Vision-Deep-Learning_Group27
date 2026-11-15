@@ -13,9 +13,16 @@ from reranker.reranker import SelectionDecision
 
 @dataclass(frozen=True)
 class RefreshJob:
+    """One refresh request. ``generation`` is immutable for this job.
+
+    A job created in one capture run must never publish into a later run. The
+    app compares this value with the current generation before publication.
+    """
+
     packet: RGBFrame
     flow: FlowResult | None
     decision: SelectionDecision
+    generation: int = 0
 
 
 class RefreshDispatcher:

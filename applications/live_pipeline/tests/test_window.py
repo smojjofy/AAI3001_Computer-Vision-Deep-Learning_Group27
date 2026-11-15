@@ -167,3 +167,30 @@ def test_commit_stamps_the_current_generation() -> None:
     window.commit(frame(1, 100))
     assert window.reference is not None
     assert window.reference.generation == 3
+
+
+def test_commit_rejects_a_stale_generation() -> None:
+    # RT-0024 item 1: a refresh started in generation 0 must not commit after a
+    # reset to generation 1.
+    window = selector(1.0)
+    window.set_generation(0)
+    window.commit(frame(5, 100), generation=0)
+    old_reference = window.reference
+    window.set_generation(1)
+    assert window.commit(frame(9, 200), generation=0) is False
+    assert window.reference is None
+    assert old_reference is not None
+    # A current-generation commit is accepted.
+    assert window.commit(frame(10, 300), generation=1) is True
+    assert window.reference is not None
+    assert window.reference.frame_id == 10
+    assert window.reference.generation == 1
+
+
+def test_candidate_current_generation_filter() -> None:
+    window = selector(1.0)
+    window.set_generation(2)
+    current = window.observe(frame(1, 100))
+    assert window.candidate_is_current(current)
+    window.set_generation(3)
+    assert not window.candidate_is_current(current)

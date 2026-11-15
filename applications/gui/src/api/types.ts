@@ -29,6 +29,10 @@ export interface PoseJoint {
 export interface PoseDepthFrame {
   schema_version: string
   frame_id: number
+  /** Capture run that produced this image. */
+  generation?: number
+  /** Splat state this image was published with. */
+  splat_frame_id?: number
   source_id: string
   capture_timestamp_ns: string
   width: number
@@ -87,6 +91,8 @@ export interface SplatArraySpec {
 export interface SplatHeader {
   schema_version: string
   frame_id: string
+  /** Integer capture frame id. Use this for identity comparisons. */
+  frame_id_int?: number
   source_id: string
   timestamp_ns: number
   count: number

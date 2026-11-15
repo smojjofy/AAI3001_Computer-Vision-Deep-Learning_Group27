@@ -86,6 +86,8 @@ class PipelineState:
     pose_depth: dict[str, Any] | None = None
     mask_png: bytes | None = None
     motion: dict[str, Any] | None = None
+    motion_published_total: int = 0
+    motion_rejected_total: int = 0
     diagnostics: dict[str, Any] = field(default_factory=dict)
     last_publish_wall_ns: int = 0
     active_identity: ActiveStateIdentity | None = None
@@ -93,25 +95,33 @@ class PipelineState:
     person_lost_mono_ns: int | None = None
     last_invalid_person_mono_ns: int | None = None
 
-    def publish_splat(
+    def publish_snapshot(
         self,
         header: dict[str, Any],
         buffer: bytes,
         *,
+        pose_depth: dict[str, Any] | None,
+        mask: np.ndarray | None,
         pose_joints: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Publish one complete state: splat data and its pose joints together.
+        """Publish one complete state under one lock.
 
-        A successful publish clears the latched person-loss event and clears
-        any reuse motion, because a new state supersedes its warp.
+        The splat, pose-depth image, and mask in this snapshot all come from the
+        same refresh, so a poll cannot mix results from two refreshes. A pose
+        preview that failed is published as None, never as the previous frame.
         """
+        mask_png = None
+        if mask is not None:
+            image = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
+            ok, encoded = cv2.imencode(".png", image)
+            mask_png = encoded.tobytes() if ok else None
         with self._lock:
             self.splat_header = header
             self.splat_buffer = buffer
+            self.pose_depth = pose_depth
+            self.mask_png = mask_png
             self.pose_joints = list(pose_joints) if pose_joints else None
             self.last_publish_wall_ns = time.monotonic_ns()
-            # A committed state becomes the flow reference for later reuse
-            # windows of the same capture run.
             display_frame = int(header.get("frame_id_int", header.get("frame_id", 0)) or 0)
             self.active_identity = ActiveStateIdentity(
                 source_id=str(header.get("source_id", "")),
@@ -138,42 +148,34 @@ class PipelineState:
             return round((time.monotonic_ns() - self.person_lost_mono_ns) / 1_000_000.0, 1)
 
     def publish_motion(self, payload: dict[str, Any] | None) -> None:
-        """Publish reuse motion only when it matches the displayed splat state."""
+        """Publish reuse motion only when it matches the displayed splat state.
+
+        Counts separate accepted and rejected motion. A reuse decision is not a
+        displayed warp; only accepted motion is counted as published.
+        """
         with self._lock:
             if payload is None:
                 self.motion = None
                 return
             identity = self.active_identity
-            if identity is None:
-                self.motion = None
-                return
-            if (
-                str(payload.get("source_id", "")) != identity.source_id
+            rejected = (
+                identity is None
+                or str(payload.get("source_id", "")) != identity.source_id
                 or int(payload.get("generation", -1)) != identity.generation
                 or payload.get("reference_frame_id") != identity.frame_id
                 or payload.get("splat_frame_id") != identity.frame_id
                 or int(payload.get("frame_id", 0)) <= identity.frame_id
-            ):
+            )
+            if rejected:
                 self.motion = None
+                self.motion_rejected_total += 1
                 return
             self.motion = payload
+            self.motion_published_total += 1
 
     def get_motion(self) -> dict[str, Any] | None:
         with self._lock:
             return self.motion
-
-    def publish_pose_depth(self, payload: dict[str, Any] | None) -> None:
-        with self._lock:
-            self.pose_depth = payload
-
-    def publish_mask(self, mask: np.ndarray | None) -> None:
-        with self._lock:
-            if mask is None:
-                self.mask_png = None
-                return
-            image = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
-            ok, encoded = cv2.imencode(".png", image)
-            self.mask_png = encoded.tobytes() if ok else None
 
     def publish_diagnostics(self, payload: dict[str, Any]) -> None:
         with self._lock:
@@ -194,10 +196,10 @@ class PipelineState:
             header = dict(self.splat_header)
             age_ns = time.monotonic_ns() - self.last_publish_wall_ns
             header["state_age_ms"] = round(age_ns / 1_000_000.0, 1)
-            # These values describe the state age only. The browser runs the
-            # hold-then-fade clock from /api/diagnostics person_loss_age_ms, so
-            # a slow but valid refresh never starts a fade.
-            header["display_alpha"] = 0.0 if self.person_lost_mono_ns is not None else 1.0
+            # One display clock owns the 500 ms hold and 500 ms fade: the
+            # browser runs it from person_loss_age_ms. The server never forces
+            # alpha to zero, because a response during the hold would bypass it.
+            header["display_alpha"] = 1.0
             header["person_lost"] = self.person_lost_mono_ns is not None
             if self.active_identity is not None:
                 header["active_identity"] = self.active_identity.to_dict()
@@ -225,6 +227,8 @@ class PipelineState:
                 None if self.active_identity is None else self.active_identity.to_dict()
             )
             payload["motion_active"] = self.motion is not None
+            payload["motion_published"] = self.motion_published_total
+            payload["motion_rejected"] = self.motion_rejected_total
             return payload
 
 
@@ -284,9 +288,14 @@ class PipelineRequestHandler(BaseHTTPRequestHandler):
         if payload is None:
             self._send_no_content()
             return
+        identity = self.server.state.get_active_identity()
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
         self.send_header("Cache-Control", "no-store")
+        if identity is not None:
+            self.send_header("X-Mask-Source-Id", identity.source_id)
+            self.send_header("X-Mask-Generation", str(identity.generation))
+            self.send_header("X-Mask-Frame-Id", str(identity.frame_id))
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)

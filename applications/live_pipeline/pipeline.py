@@ -150,9 +150,15 @@ class RefreshPipeline:
         assert intrinsics is not None
         return intrinsics
 
-    def process(self, packet) -> RefreshOutcome:
-        """Run pose, depth, mask, and construction for one selected frame."""
+    def process(self, packet, generation: int | None = None) -> RefreshOutcome:
+        """Run pose, depth, mask, and construction for one selected frame.
+
+        `generation` is the capture run of this request. It is stamped on the
+        outcome and never read again from mutable state, so a slow refresh that
+        finishes after a run change cannot claim the newer generation.
+        """
         started = perf_counter()
+        job_generation = int(self.generation if generation is None else generation)
         intrinsics = self._ensure_intrinsics(packet)
 
         pipeline = self._ensure_pipeline()
@@ -216,7 +222,7 @@ class RefreshPipeline:
         try:
             state = construct_splat_state(frame, ConstructionConfig(sample_stride=self.sample_stride))
             header, buffer = splat_state_payload(
-            state, generation=int(self.generation), source_frame_id=int(packet.frame_id)
+            state, generation=job_generation, source_frame_id=int(packet.frame_id)
         )
         except Exception as error:
             self.failure_count += 1
@@ -270,7 +276,7 @@ class RefreshPipeline:
             frame_id=packet.frame_id,
             source_id=packet.source_id,
             capture_timestamp_ns=packet.capture_timestamp_ns,
-            generation=int(self.generation),
+            generation=job_generation,
             state=state,
             header=header,
             buffer=buffer,

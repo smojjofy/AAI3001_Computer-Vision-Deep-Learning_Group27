@@ -103,6 +103,42 @@ ultralytics 8.4.213.
   gaussian-splats-3d` was tested as the three.js-native alternative and also
   works.
 
+## Active-state machine (Phase 1 finalized)
+
+- **Capture run generations.** A run generation starts at capture start and
+  increases on a source reopen, a resolution change, a changed timestamp
+  origin, or a backward capture time. A reconnect is detected from
+  `StreamHandler.metrics.reconnect_count`, because a live OpenCV source has no
+  source timestamp. A generation change clears the candidate window, the
+  retained flow reference, the active state identity, and any motion.
+- **Immutable job generation.** Each refresh job carries the generation it was
+  created in. The worker rejects a job whose generation is no longer current
+  before it publishes, and `WindowSelector.commit(packet, generation)` rejects a
+  stale commit, so a slow refresh can never publish or become the reference of
+  a newer run.
+- **Consistent snapshot.** One publish operation writes the splat header and
+  buffer, the depth and skeleton image, the mask, and the pose joints under one
+  lock. A failed pose preview is published as `None`, so a poll cannot mix two
+  refreshes or show an older depth image. `/api/mask` carries
+  `X-Mask-Source-Id`, `X-Mask-Generation`, and `X-Mask-Frame-Id`.
+- **Complete identity in the browser.** Every fetch key is
+  `(source_id, generation, frame_id)`, not the frame id alone. If a fetch is in
+  flight, the newest pending identity is fetched when it ends; a failure retries
+  the same identity after 500 ms.
+- **One display clock.** The server latches the first invalid-person event and
+  reports `person_loss_age_ms`; it never forces alpha to zero. The browser
+  anchors the age on `performance.now()`, holds 500 ms, fades over 500 ms, and
+  releases the clock only after a state that is new for the loss generation is
+  installed. A slow but valid refresh does not start a fade.
+- **Motion counters.** `motion_published` and `motion_rejected` separate motion
+  the backend accepted from motion it rejected. A reuse decision is not counted
+  as a displayed warp.
+
+Measured on the final Phase 1 build: person -> empty scene latches the loss and
+the viewer fades to 0.00 alpha after the hold; the following person segment
+publishes a new state, clears the latch, and restores 1.00 alpha. In a 22 s
+recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.

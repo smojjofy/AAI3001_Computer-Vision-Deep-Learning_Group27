@@ -112,8 +112,22 @@ def main() -> None:
     )
 
     counters: Counter[str] = Counter()
-    latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None, "splat_identity": None}
+    latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None}
     lock = threading.Lock()
+
+    def advance_generation(reason: str) -> None:
+        """Start a new capture run and drop every old-run selection and job."""
+        nonlocal run_generation, window, window_start_capture, window_started_wall
+        run_generation += 1
+        selector.set_generation(run_generation)
+        pipeline.generation = run_generation
+        state.publish_motion(None)
+        window = []
+        window_start_capture = None
+        window_started_wall = None
+        counters["run_generation_changes"] += 1
+        counters[f"run_change_{reason}"] += 1
+        print(json.dumps({"run_generation": run_generation, "reason": reason}), flush=True)
 
     def publish_diagnostics() -> None:
         with lock:
@@ -160,8 +174,12 @@ def main() -> None:
         )
 
     def refresh_worker(job) -> None:
+        job_generation = int(getattr(job, "generation", run_generation))
+        if job_generation != selector.generation:
+            counters["refresh_discarded_stale"] += 1
+            return
         try:
-            outcome = pipeline.process(job.packet)
+            outcome = pipeline.process(job.packet, generation=job_generation)
         except RefreshError as error:
             counters["refresh_failed"] += 1
             if getattr(error, "person_missing", False):
@@ -172,20 +190,28 @@ def main() -> None:
             with lock:
                 latest["last_error"] = str(error)
             raise
-        # One consistent state: splat data and the pose joints that belong to it.
-        state.publish_splat(outcome.header, outcome.buffer, pose_joints=outcome.pose_joints)
+        # Reject a result whose run changed while the worker was busy.
+        if job_generation != selector.generation or outcome.generation != job_generation:
+            counters["refresh_discarded_stale"] += 1
+            return
+        # One consistent snapshot: splat, pose-depth image, mask, and the pose
+        # joints that belong to this state. A missing preview is published as
+        # None so the viewer cannot show an older frame.
+        pose_depth = None
         if outcome.pose_preview is not None:
-            state.publish_pose_depth(outcome.pose_preview)
-        state.publish_mask(outcome.mask.mask)
+            pose_depth = dict(outcome.pose_preview)
+            pose_depth["generation"] = job_generation
+            pose_depth["splat_frame_id"] = int(outcome.frame_id)
+        state.publish_snapshot(
+            outcome.header,
+            outcome.buffer,
+            pose_depth=pose_depth,
+            mask=outcome.mask.mask,
+            pose_joints=outcome.pose_joints,
+        )
         with lock:
             latest["outcome_header"] = outcome.header
             latest["last_error"] = None
-            latest["splat_identity"] = {
-                "source_id": outcome.source_id,
-                "generation": outcome.generation,
-                "frame_id": outcome.frame_id,
-                "reference_frame_id": outcome.frame_id,
-            }
         counters["refresh_published"] += 1
         print(
             json.dumps(
@@ -199,7 +225,10 @@ def main() -> None:
             flush=True,
         )
 
-    dispatcher = RefreshDispatcher(refresh_worker, on_success=lambda job: selector.commit(job.packet))
+    dispatcher = RefreshDispatcher(
+        refresh_worker,
+        on_success=lambda job: selector.commit(job.packet, generation=int(getattr(job, "generation", -1))),
+    )
     handler = StreamHandler(build_source(args), queue_capacity=args.queue_capacity, max_reconnect_attempts=3)
     server = PipelineServer(handler, state, port=args.port)
     server_thread = threading.Thread(target=server.serve_forever, name="pipeline-server", daemon=True)
@@ -210,16 +239,33 @@ def main() -> None:
     window_started_wall: float | None = None
 
     def flush_window() -> None:
-        nonlocal window, window_start_capture, window_started_wall
+        nonlocal window, window_start_capture, window_started_wall, window_generation_value
         if not window:
             return
-        decision = selector.select(window)
+        if window_generation_value != selector.generation:
+            # A capture run changed while this window was open. Drop it; the new
+            # run starts from a bootstrap window, never from old candidates.
+            counters["windows_discarded_generation"] += 1
+            window = []
+            window_start_capture = None
+            window_started_wall = None
+            return
+        current = [item for item in window if selector.candidate_is_current(item)]
+        if not current:
+            counters["windows_discarded_generation"] += 1
+            window = []
+            window_start_capture = None
+            window_started_wall = None
+            return
+        decision = selector.select(current)
         counters["windows"] += 1
         with lock:
             latest["decision"] = decision
         if decision.action == "refresh":
             counters["refresh_requested"] += 1
-            dispatcher.submit(RefreshJob(decision.selected.packet, decision.selected.flow, decision))
+            dispatcher.submit(
+                RefreshJob(decision.selected.packet, decision.selected.flow, decision, generation=window_generation_value)
+            )
         else:
             counters["reuse"] += 1
             # Take the identity from the published state, not from a local copy,
@@ -246,6 +292,8 @@ def main() -> None:
     deadline = math.inf if args.duration_s == 0 else time.monotonic() + args.duration_s
     started = time.monotonic()
     last_packet_identity: tuple[str, tuple[int, int], int, str] | None = None
+    last_reconnect_count = int(handler.metrics.reconnect_count)
+    window_generation_value = selector.generation
     handler.start()
     server_thread.start()
     print(f"Integrated app: http://127.0.0.1:{args.port}/  (Ctrl+C stops)", flush=True)
@@ -257,7 +305,14 @@ def main() -> None:
                 # A new capture run after a source reopen or a resolution change
                 # resets the retained reference, the active state identity, and
                 # any motion, so no flow or warp spans two runs.
-                if last_packet_identity is not None:
+                reconnect_now = int(handler.metrics.reconnect_count)
+                if reconnect_now != last_reconnect_count:
+                    # A live OpenCV source has no source timestamp, so a reopen
+                    # is invisible in the packet identity. The handler counter
+                    # is the only reliable reopen signal.
+                    last_reconnect_count = reconnect_now
+                    advance_generation("reconnect")
+                elif last_packet_identity is not None:
                     previous = last_packet_identity
                     if (
                         packet.source_id != previous[0]
@@ -265,13 +320,7 @@ def main() -> None:
                         or int(packet.capture_timestamp_ns) < previous[2]
                         or str(packet.timestamp_origin) != previous[3]
                     ):
-                        run_generation += 1
-                        selector.set_generation(run_generation)
-                        pipeline.generation = run_generation
-                        state.publish_motion(None)
-                        with lock:
-                            latest["splat_identity"] = None
-                        counters["run_generation_changes"] += 1
+                        advance_generation("identity_change")
                 last_packet_identity = (
                     packet.source_id,
                     (packet.width, packet.height),
@@ -284,6 +333,7 @@ def main() -> None:
                 if window_start_capture is None:
                     window_start_capture = int(packet.capture_timestamp_ns)
                     window_started_wall = time.monotonic()
+                    window_generation_value = selector.generation
                 if int(packet.capture_timestamp_ns) - window_start_capture >= window_ns:
                     flush_window()
             else:
