@@ -40,7 +40,7 @@ sys.path[:0] = [
 from backend.pipeline_server import PipelineServer, PipelineState  # noqa: E402
 from live_pipeline.adapters import DepthThresholdConfig  # noqa: E402
 from live_pipeline.motion import build_motion_preview  # noqa: E402
-from live_pipeline.runstate import RunGuard, drain_queue  # noqa: E402
+from live_pipeline.runstate import PacketRunTracker, RunCounters, RunGuard, drain_queue  # noqa: E402
 from live_pipeline.pipeline import RefreshError, RefreshPipeline  # noqa: E402
 from live_pipeline.scheduler import RefreshDispatcher, RefreshJob  # noqa: E402
 from live_pipeline.window import WindowSelector  # noqa: E402
@@ -91,6 +91,8 @@ def main() -> None:
     # One capture run. A source reopen, resolution change, or backward capture
     # time advances it, so flow, motion, and splat identity never span two runs.
     run_guard = RunGuard(0)
+    run_counters = RunCounters(0)
+    packet_tracker = PacketRunTracker()
     pipeline = RefreshPipeline(
         mask_config=DepthThresholdConfig(
             band_m=args.depth_band_m,
@@ -120,6 +122,8 @@ def main() -> None:
         """Start a new capture run and drop every old-run selection and job."""
         nonlocal window, window_start_capture, window_started_wall
         generation = run_guard.advance()
+        run_counters.start_run(generation)
+        packet_tracker.reset()
         selector.set_generation(generation)
         pipeline.generation = generation
         state.publish_motion(None)
@@ -154,8 +158,9 @@ def main() -> None:
                 "candidates": None if decision is None else decision.candidates,
                 "cache_age_ms": cache_age_ms,
                 "active_state_frame_id": selector.active_state_frame_id,
-                "refresh_count": pipeline.refresh_count,
-                "refresh_failures": pipeline.failure_count,
+                "refresh_count": run_counters.refresh_count,
+                "refresh_failures": run_counters.refresh_failures,
+                "run_generation": run_guard.generation,
                 "last_error": last_error,
                 "splat": None if header is None else {
                     "frame_id": header.get("frame_id"),
@@ -187,6 +192,7 @@ def main() -> None:
         except RefreshError as error:
             def record_failure() -> None:
                 counters["refresh_failed"] += 1
+                run_counters.record_failure(job_generation)
                 if getattr(error, "person_missing", False):
                     # CONTEXT.md invalid-person event: hold starts now and
                     # latches until a successful refresh publishes a state.
@@ -210,6 +216,7 @@ def main() -> None:
             pose_depth["generation"] = job_generation
             pose_depth["splat_frame_id"] = int(outcome.frame_id)
         def publish() -> None:
+            run_counters.record_published(job_generation)
             state.publish_snapshot(
                 outcome.header,
                 outcome.buffer,
@@ -305,7 +312,6 @@ def main() -> None:
 
     deadline = math.inf if args.duration_s == 0 else time.monotonic() + args.duration_s
     started = time.monotonic()
-    last_packet_identity: tuple[str, tuple[int, int], int, str] | None = None
     last_reconnect_count = int(handler.metrics.reconnect_count)
     window_generation_value = run_guard.generation
     handler.start()
@@ -327,27 +333,18 @@ def main() -> None:
                     # is the only reliable reopen signal.
                     last_reconnect_count = reconnect_now
                     advance_generation("reconnect")
-                elif last_packet_identity is not None:
-                    previous = last_packet_identity
-                    if (
-                        packet.source_id != previous[0]
-                        or (packet.width, packet.height) != previous[1]
-                        or int(packet.capture_timestamp_ns) < previous[2]
-                        or str(packet.timestamp_origin) != previous[3]
-                    ):
-                        advance_generation("identity_change")
+                else:
+                    reason = packet_tracker.change_reason(packet)
+                    if reason is not None:
+                        advance_generation(f"identity_{reason}")
                 if run_guard.generation != generation_before:
                     # This packet may predate the run change (it was already
-                    # dequeued). Drop it; the drain in advance_generation
-                    # removed the rest of the old queue.
+                    # dequeued). Drop it; the drain removed the rest of the old
+                    # queue and the tracker reset makes the next packet the new
+                    # baseline, so one permanent change cannot loop.
                     counters["packets_discarded_run"] += 1
                     continue
-                last_packet_identity = (
-                    packet.source_id,
-                    (packet.width, packet.height),
-                    int(packet.capture_timestamp_ns),
-                    str(packet.timestamp_origin),
-                )
+                packet_tracker.accept(packet)
                 latest["last_capture_ns"] = int(packet.capture_timestamp_ns)
                 candidate = selector.observe(packet)
                 window.append(candidate)

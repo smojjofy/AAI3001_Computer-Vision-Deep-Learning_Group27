@@ -153,6 +153,19 @@ the viewer fades to 0.00 alpha after the hold; the following person segment
 publishes a new state, clears the latch, and restores 1.00 alpha. In a 22 s
 recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
 
+- **Mask key (RT-0028).** The mask request key is
+  `(source_id, generation, active_identity.frame_id)`, never the refresh
+  counter. The displayed mask records the identity from the response, and the
+  retry timer waits the remaining deadline, so the approved 300 ms stale rule
+  and the 500 ms failure rule both apply.
+- **Packet baseline (RT-0028).** `PacketRunTracker` detects source, size,
+  timestamp-origin, and backward-time changes. `advance_generation` resets the
+  tracker, and the next packet becomes the new baseline; one permanent change
+  cannot cause a run change on every following packet.
+- **Per-run counters (RT-0028).** Diagnostics report `RunCounters` for the
+  current generation, reset on a run change. A stale success or failure cannot
+  change the current run's `refresh_count` or `refresh_failures`.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.

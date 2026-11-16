@@ -10,6 +10,7 @@ import {
   fetchSplat,
 } from './api/liveApi'
 
+import { isKeyAtLeast, retryDelayMs, splatKey } from './api/identity'
 import { FrameProcessorPanel } from './components/FrameProcessorPanel'
 import { InferencePanel } from './components/InferencePanel'
 import { OriginalInputPanel } from './components/OriginalInputPanel'
@@ -219,11 +220,6 @@ async function pollPreview(): Promise<void> {
   }, PREVIEW_POLL_MS)
 }
 
-/** Identity key for one splat or pose-depth state. Frame id alone is not enough. */
-function splatKey(sourceId: string, generation: number, frameId: number | string): string {
-  return `${sourceId}|${generation}|${frameId}`
-}
-
 function poseKey(pose: PoseDepthFrame): string {
   const generation = Number((pose as PoseDepthFrame & { generation?: number }).generation ?? 0)
   return splatKey(pose.source_id, generation, pose.frame_id)
@@ -298,7 +294,7 @@ function scheduleSplatRetry(): void {
       splatPendingKey = null
       void refreshSplat(pending)
     }
-  }, 500)
+  }, retryDelayMs(splatRetryAt, performance.now()))
 }
 
 async function refreshMask(key: string, refreshCount: number): Promise<void> {
@@ -341,7 +337,7 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
         }
         console.warn(`Mask identity ${identityKey} is older than ${requested}; accepting after 3 tries`)
       }
-      maskRenderedKey = requested
+      maskRenderedKey = identityKey ?? requested
       maskStaleAttempts.clear()
       frameProcessorPanel.setMaskImage(result.data.bitmap, { refreshCount })
       maskRetryAt = 0
@@ -364,19 +360,6 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
   }
 }
 
-/** True when a later key of the same capture run is not older than the request. */
-function isKeyAtLeast(candidate: string, requested: string): boolean {
-  const [candidateSource, candidateGeneration, candidateFrame] = candidate.split('|')
-  const [requestedSource, requestedGeneration, requestedFrame] = requested.split('|')
-  if (candidateSource !== requestedSource) {
-    return false
-  }
-  if (Number(candidateGeneration) !== Number(requestedGeneration)) {
-    return false
-  }
-  return Number(candidateFrame) >= Number(requestedFrame)
-}
-
 function scheduleMaskRetry(): void {
   if (maskRetryTimer !== null) {
     return
@@ -390,7 +373,7 @@ function scheduleMaskRetry(): void {
       maskPendingCount = null
       void refreshMask(pending, count)
     }
-  }, 500)
+  }, retryDelayMs(maskRetryAt, performance.now()))
 }
 
 async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
@@ -436,7 +419,7 @@ function schedulePoseDepthRetry(): void {
       poseDepthPending = null
       void refreshPoseDepth(pending)
     }
-  }, 500)
+  }, retryDelayMs(poseDepthRetryAt, performance.now()))
 }
 
 /** Release the viewer loss clock only after a new state for this run is shown. */
@@ -512,7 +495,7 @@ async function pollState(): Promise<void> {
         const maskKey = splatKey(
           activeIdentity.source_id,
           activeIdentity.generation,
-          diagnostics.refresh_count,
+          activeIdentity.frame_id,
         )
         if (maskKey !== maskRenderedKey && maskKey !== maskPendingKey) {
           lastMaskRefreshCount = diagnostics.refresh_count

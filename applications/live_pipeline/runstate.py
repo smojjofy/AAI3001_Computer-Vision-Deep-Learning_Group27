@@ -77,3 +77,101 @@ def drain_queue(queue, *, limit: int = 64) -> int:
             break
         discarded += 1
     return discarded
+
+
+class PacketRunTracker:
+    """Detect capture-run changes from packet identity.
+
+    The tracker keeps the last accepted packet identity. After a run change the
+    caller calls :meth:`reset`, so the next packet becomes the new baseline
+    instead of comparing against the old run's packet. Without the reset, every
+    later packet would look like another change and be discarded again.
+    """
+
+    def __init__(self) -> None:
+        self._identity: tuple[str, tuple[int, int], int, str] | None = None
+
+    @staticmethod
+    def identity_of(packet) -> tuple[str, tuple[int, int], int, str]:
+        return (
+            str(packet.source_id),
+            (int(packet.width), int(packet.height)),
+            int(packet.capture_timestamp_ns),
+            str(packet.timestamp_origin),
+        )
+
+    def change_reason(self, packet) -> str | None:
+        """Return a run-change reason for this packet, or None.
+
+        ``source_or_size`` covers a permanent source or image-size change;
+        ``backward_time`` covers a capture clock restart inside one run.
+        """
+        identity = self.identity_of(packet)
+        previous = self._identity
+        if previous is None:
+            return None
+        if identity[0] != previous[0] or identity[1] != previous[1]:
+            return "source_or_size"
+        if identity[2] < previous[2]:
+            return "backward_time"
+        if identity[3] != previous[3]:
+            return "timestamp_origin"
+        return None
+
+    def accept(self, packet) -> None:
+        """Record this packet as the baseline for later comparisons."""
+        self._identity = self.identity_of(packet)
+
+    def reset(self) -> None:
+        """Drop the baseline; the next accepted packet starts it again."""
+        self._identity = None
+
+    @property
+    def identity(self) -> tuple[str, tuple[int, int], int, str] | None:
+        return self._identity
+
+
+class RunCounters:
+    """Counters for the current capture run only.
+
+    A stale job can finish after a run change. Its counts must not appear in the
+    current run's diagnostics, so every update checks the generation first. A
+    run change resets the counters.
+    """
+
+    def __init__(self, generation: int = 0) -> None:
+        self._generation = int(generation)
+        self.refresh_count = 0
+        self.refresh_failures = 0
+        self.discarded_stale = 0
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def start_run(self, generation: int) -> None:
+        self._generation = int(generation)
+        self.refresh_count = 0
+        self.refresh_failures = 0
+        self.discarded_stale = 0
+
+    def record_published(self, generation: int) -> bool:
+        if int(generation) != self._generation:
+            self.discarded_stale += 1
+            return False
+        self.refresh_count += 1
+        return True
+
+    def record_failure(self, generation: int) -> bool:
+        if int(generation) != self._generation:
+            self.discarded_stale += 1
+            return False
+        self.refresh_failures += 1
+        return True
+
+    def snapshot(self) -> dict[str, int]:
+        return {
+            "refresh_count": self.refresh_count,
+            "refresh_failures": self.refresh_failures,
+            "discarded_stale": self.discarded_stale,
+        }
