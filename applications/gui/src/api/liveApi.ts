@@ -6,7 +6,9 @@
  */
 
 import type {
+  ActiveStateIdentity,
   DiagnosticsPayload,
+  MaskFrame,
   MotionPayload,
   PoseDepthFrame,
   PreviewFrame,
@@ -76,16 +78,45 @@ export function fetchMotion(): Promise<ApiResult<MotionPayload>> {
   return requestJson<MotionPayload>('/api/motion')
 }
 
-export async function fetchMask(): Promise<ApiResult<ImageBitmap>> {
-  const result = await request('/api/mask', 'image/png')
-  if (result.kind !== 'ok') {
-    return result
-  }
+export async function fetchMask(): Promise<ApiResult<MaskFrame>> {
   try {
-    const blob = new Blob([result.data], { type: 'image/png' })
-    return { kind: 'ok', data: await createImageBitmap(blob) }
+    const response = await fetch('/api/mask', {
+      cache: 'no-store',
+      headers: { Accept: 'image/png' },
+    })
+    if (response.status === 204) {
+      return { kind: 'empty' }
+    }
+    if (!response.ok) {
+      return { kind: 'error', error: `HTTP ${response.status}` }
+    }
+    const identity = parseMaskIdentity(response.headers)
+    const data = await response.arrayBuffer()
+    const blob = new Blob([data], { type: 'image/png' })
+    return { kind: 'ok', data: { bitmap: await createImageBitmap(blob), identity } }
   } catch (error) {
     return { kind: 'error', error: describeError(error) }
+  }
+}
+
+/** Read the mask identity headers. They are written from one locked state read. */
+function parseMaskIdentity(headers: Headers): ActiveStateIdentity | null {
+  const sourceId = headers.get('X-Mask-Source-Id')
+  const generationText = headers.get('X-Mask-Generation')
+  const frameText = headers.get('X-Mask-Frame-Id')
+  if (sourceId === null || generationText === null || frameText === null) {
+    return null
+  }
+  const generation = Number(generationText)
+  const frameId = Number(frameText)
+  if (!Number.isFinite(generation) || !Number.isFinite(frameId)) {
+    return null
+  }
+  return {
+    source_id: sourceId,
+    generation,
+    frame_id: frameId,
+    reference_frame_id: frameId,
   }
 }
 

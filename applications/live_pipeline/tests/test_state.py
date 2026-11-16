@@ -38,6 +38,68 @@ def publish(state: PipelineState, frame_id: int = 3, generation: int = 2) -> Non
     )
 
 
+def mask_full() -> np.ndarray:
+    return np.ones((8, 8), np.uint8)
+
+
+def mask_with_hole() -> np.ndarray:
+    image = np.ones((8, 8), np.uint8)
+    image[3:5, 3:5] = 0
+    return image
+
+
+def decode_png(data: bytes) -> np.ndarray:
+    import cv2
+
+    return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+
+
+def test_mask_response_pairs_mask_and_identity_atomically() -> None:
+    # RT-0026 item 1: a reader must never see the mask of one state with the
+    # identity of another. Two writers publish a recognisable mask/identity
+    # pair while the reader checks the pair.
+    import threading
+
+    state = PipelineState()
+    state.publish_snapshot(header(frame_id=1), b"a", pose_depth=None, mask=mask_full(), pose_joints=None)
+    errors: list[str] = []
+    done = threading.Event()
+
+    def writer() -> None:
+        frame = 2
+        while not done.is_set():
+            if frame % 2 == 0:
+                state.publish_snapshot(header(frame_id=frame), b"b", pose_depth=None, mask=mask_with_hole(), pose_joints=None)
+            else:
+                state.publish_snapshot(header(frame_id=frame), b"b", pose_depth=None, mask=mask_full(), pose_joints=None)
+            frame += 1
+
+    def reader() -> None:
+        for _ in range(300):
+            response = state.mask_response()
+            if response is None:
+                continue
+            identity, png = response
+            if identity is None:
+                continue
+            decoded = decode_png(png)
+            has_hole = int((decoded < 128).sum()) > 0
+            # The pair is valid only when the mask content matches the parity
+            # of the frame id that was published with it.
+            expected_hole = identity.frame_id % 2 == 0
+            if has_hole != expected_hole:
+                errors.append(f"frame {identity.frame_id} paired with hole={has_hole}")
+
+    writer_thread = threading.Thread(target=writer)
+    reader_thread = threading.Thread(target=reader)
+    writer_thread.start()
+    reader_thread.start()
+    reader_thread.join(10)
+    done.set()
+    writer_thread.join(10)
+    assert not errors, errors[:3]
+
+
 def motion(frame_id: int, reference_frame_id: int, generation: int = 2, source_id: str = "cam") -> dict:
     return {
         "schema_version": "1.0",
@@ -59,7 +121,7 @@ def test_snapshot_publishes_splat_pose_mask_together() -> None:
     assert identity == ActiveStateIdentity("cam", 2, IDENTITY_FRAME, IDENTITY_FRAME)
     assert state.get_pose_joints() == [{"index": 11, "x": 0.4, "y": 0.3}]
     assert state.get_pose_depth() is not None
-    assert state.get_mask_png() is not None
+    assert state.mask_response() is not None
     assert state.splat_response() is not None
 
 
@@ -69,7 +131,7 @@ def test_snapshot_without_pose_clears_the_old_pose() -> None:
     state.publish_snapshot(header(frame_id=4), b"data2", pose_depth=None, mask=None, pose_joints=None)
     assert state.get_pose_depth() is None
     assert state.get_pose_joints() is None
-    assert state.get_mask_png() is None
+    assert state.mask_response() is None
 
 
 def test_motion_must_match_the_active_state() -> None:

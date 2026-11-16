@@ -134,6 +134,20 @@ ultralytics 8.4.213.
   the backend accepted from motion it rejected. A reuse decision is not counted
   as a displayed warp.
 
+- **Mask identity (RT-0026).** `/api/mask` returns the mask and the active
+  state identity from one lock hold, so a snapshot cannot be published between
+  the two values. The headers `X-Mask-Source-Id`, `X-Mask-Generation`, and
+  `X-Mask-Frame-Id` describe that same read. The browser compares the header
+  identity with the state it requested and retries a stale mask up to three
+  times before accepting it with a warning.
+- **Guarded publication (RT-0026).** One `RunGuard` lock owns the generation
+  and authorizes publication or failure recording. A run change cannot occur
+  between the generation check and the state change. A stale refresh failure
+  never latches person loss in a later run.
+- **Queue separation (RT-0026).** On a run change the app drains queued packets
+  and drops the packet already in its hand, because it may predate the change.
+  Counters `packets_discarded_run` and `refresh_discarded_stale` report this.
+
 Measured on the final Phase 1 build: person -> empty scene latches the loss and
 the viewer fades to 0.00 alpha after the hold; the following person segment
 publishes a new state, clears the latch, and restores 1.00 alpha. In a 22 s

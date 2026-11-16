@@ -206,13 +206,21 @@ class PipelineState:
             encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
             return struct.pack("<I", len(encoded)) + encoded + self.splat_buffer
 
+    def mask_response(self) -> tuple[ActiveStateIdentity | None, bytes] | None:
+        """Return the mask and the identity of the state that produced it.
+
+        Both values come from one lock hold, so a snapshot cannot be published
+        between them. The browser compares the identity with the state it asked
+        for and never displays a mask from a different state.
+        """
+        with self._lock:
+            if self.mask_png is None:
+                return None
+            return (self.active_identity, self.mask_png)
+
     def get_pose_depth(self) -> dict[str, Any] | None:
         with self._lock:
             return self.pose_depth
-
-    def get_mask_png(self) -> bytes | None:
-        with self._lock:
-            return self.mask_png
 
     def get_diagnostics(self) -> dict[str, Any]:
         with self._lock:
@@ -284,11 +292,11 @@ class PipelineRequestHandler(BaseHTTPRequestHandler):
         self._send_json(payload)
 
     def _send_mask(self) -> None:
-        payload = self.server.state.get_mask_png()
-        if payload is None:
+        response = self.server.state.mask_response()
+        if response is None:
             self._send_no_content()
             return
-        identity = self.server.state.get_active_identity()
+        identity, payload = response
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
         self.send_header("Cache-Control", "no-store")

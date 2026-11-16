@@ -95,6 +95,7 @@ let lastMaskRefreshCount = -1
 let maskFetchInFlight = false
 let maskRetryAt = 0
 let maskRetryTimer: number | null = null
+const maskStaleAttempts = new Map<string, number>()
 
 let lastMotionFrameId: number | null = null
 let activeMotion: MotionPayload | null = null
@@ -319,8 +320,30 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
   try {
     const result = await fetchMask()
     if (result.kind === 'ok') {
+      // The mask headers carry the identity of the state that produced the
+      // image. Never display a mask older than the requested state; retry once
+      // because a publish can land between the diagnostics and mask reads.
+      const identity = result.data.identity
+      const identityKey = identity === null
+        ? null
+        : splatKey(identity.source_id, identity.generation, identity.frame_id)
+      const acceptable = identityKey === null || identityKey === requested
+        || isKeyAtLeast(identityKey, requested)
+      if (!acceptable) {
+        const attempts = maskStaleAttempts.get(requested) ?? 0
+        if (attempts < 3) {
+          maskStaleAttempts.set(requested, attempts + 1)
+          maskPendingKey = requested
+          maskPendingCount = refreshCount
+          maskRetryAt = performance.now() + 300
+          scheduleMaskRetry()
+          return
+        }
+        console.warn(`Mask identity ${identityKey} is older than ${requested}; accepting after 3 tries`)
+      }
       maskRenderedKey = requested
-      frameProcessorPanel.setMaskImage(result.data, { refreshCount })
+      maskStaleAttempts.clear()
+      frameProcessorPanel.setMaskImage(result.data.bitmap, { refreshCount })
       maskRetryAt = 0
     } else {
       frameProcessorPanel.setMaskImage(null, null)
@@ -339,6 +362,19 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
     maskPendingCount = null
     void refreshMask(next, nextCount)
   }
+}
+
+/** True when a later key of the same capture run is not older than the request. */
+function isKeyAtLeast(candidate: string, requested: string): boolean {
+  const [candidateSource, candidateGeneration, candidateFrame] = candidate.split('|')
+  const [requestedSource, requestedGeneration, requestedFrame] = requested.split('|')
+  if (candidateSource !== requestedSource) {
+    return false
+  }
+  if (Number(candidateGeneration) !== Number(requestedGeneration)) {
+    return false
+  }
+  return Number(candidateFrame) >= Number(requestedFrame)
 }
 
 function scheduleMaskRetry(): void {

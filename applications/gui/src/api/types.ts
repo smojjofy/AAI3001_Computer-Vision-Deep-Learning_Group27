@@ -131,6 +131,12 @@ export interface ActiveStateIdentity {
   reference_frame_id: number | null
 }
 
+/** One decoded mask image with the identity of the state that produced it. */
+export interface MaskFrame {
+  bitmap: ImageBitmap
+  identity: ActiveStateIdentity | null
+}
+
 export interface SplatFrame {
   header: SplatHeader
   /** Constructor convention positions: metres, +X right, +Y up, forward -Z. */

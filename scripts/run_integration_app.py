@@ -40,6 +40,7 @@ sys.path[:0] = [
 from backend.pipeline_server import PipelineServer, PipelineState  # noqa: E402
 from live_pipeline.adapters import DepthThresholdConfig  # noqa: E402
 from live_pipeline.motion import build_motion_preview  # noqa: E402
+from live_pipeline.runstate import RunGuard, drain_queue  # noqa: E402
 from live_pipeline.pipeline import RefreshError, RefreshPipeline  # noqa: E402
 from live_pipeline.scheduler import RefreshDispatcher, RefreshJob  # noqa: E402
 from live_pipeline.window import WindowSelector  # noqa: E402
@@ -87,9 +88,9 @@ def main() -> None:
     args = parser.parse_args()
 
     state = PipelineState()
-    # One capture run. A source reopen or resolution change increments it, so
-    # flow, motion, and splat identity never span two runs.
-    run_generation = 0
+    # One capture run. A source reopen, resolution change, or backward capture
+    # time advances it, so flow, motion, and splat identity never span two runs.
+    run_guard = RunGuard(0)
     pipeline = RefreshPipeline(
         mask_config=DepthThresholdConfig(
             band_m=args.depth_band_m,
@@ -101,14 +102,14 @@ def main() -> None:
         yolo_model=args.yolo_model,
         device=args.device_inference,
         require_pose=not args.allow_missing_pose,
-        generation=run_generation,
+        generation=run_guard.generation,
     )
     estimator = create_estimator(FlowConfig())
     selector = WindowSelector(
         estimator,
         threshold=args.threshold,
         active_age_ns=round(args.active_age_ms * 1_000_000),
-        generation=run_generation,
+        generation=run_guard.generation,
     )
 
     counters: Counter[str] = Counter()
@@ -117,17 +118,20 @@ def main() -> None:
 
     def advance_generation(reason: str) -> None:
         """Start a new capture run and drop every old-run selection and job."""
-        nonlocal run_generation, window, window_start_capture, window_started_wall
-        run_generation += 1
-        selector.set_generation(run_generation)
-        pipeline.generation = run_generation
+        nonlocal window, window_start_capture, window_started_wall
+        generation = run_guard.advance()
+        selector.set_generation(generation)
+        pipeline.generation = generation
         state.publish_motion(None)
+        drained = drain_queue(handler.queue)
+        if drained:
+            counters["packets_discarded_run"] += 1
         window = []
         window_start_capture = None
         window_started_wall = None
         counters["run_generation_changes"] += 1
         counters[f"run_change_{reason}"] += 1
-        print(json.dumps({"run_generation": run_generation, "reason": reason}), flush=True)
+        print(json.dumps({"run_generation": generation, "reason": reason}), flush=True)
 
     def publish_diagnostics() -> None:
         with lock:
@@ -174,26 +178,29 @@ def main() -> None:
         )
 
     def refresh_worker(job) -> None:
-        job_generation = int(getattr(job, "generation", run_generation))
-        if job_generation != selector.generation:
+        job_generation = int(getattr(job, "generation", run_guard.generation))
+        if job_generation != run_guard.generation:
             counters["refresh_discarded_stale"] += 1
             return
         try:
             outcome = pipeline.process(job.packet, generation=job_generation)
         except RefreshError as error:
-            counters["refresh_failed"] += 1
-            if getattr(error, "person_missing", False):
-                # CONTEXT.md invalid-person event: hold starts now and latches
-                # until a successful refresh publishes a state.
-                state.note_invalid_person()
-                counters["person_lost_events"] += 1
-            with lock:
-                latest["last_error"] = str(error)
+            def record_failure() -> None:
+                counters["refresh_failed"] += 1
+                if getattr(error, "person_missing", False):
+                    # CONTEXT.md invalid-person event: hold starts now and
+                    # latches until a successful refresh publishes a state.
+                    state.note_invalid_person()
+                    counters["person_lost_events"] += 1
+                with lock:
+                    latest["last_error"] = str(error)
+
+            # RT-0026 item 2: a stale failure must not start person loss in the
+            # new run or overwrite the current error.
+            if not run_guard.record_failure_if_current(job_generation, record_failure):
+                counters["refresh_discarded_stale"] += 1
+                return
             raise
-        # Reject a result whose run changed while the worker was busy.
-        if job_generation != selector.generation or outcome.generation != job_generation:
-            counters["refresh_discarded_stale"] += 1
-            return
         # One consistent snapshot: splat, pose-depth image, mask, and the pose
         # joints that belong to this state. A missing preview is published as
         # None so the viewer cannot show an older frame.
@@ -202,28 +209,35 @@ def main() -> None:
             pose_depth = dict(outcome.pose_preview)
             pose_depth["generation"] = job_generation
             pose_depth["splat_frame_id"] = int(outcome.frame_id)
-        state.publish_snapshot(
-            outcome.header,
-            outcome.buffer,
-            pose_depth=pose_depth,
-            mask=outcome.mask.mask,
-            pose_joints=outcome.pose_joints,
-        )
-        with lock:
-            latest["outcome_header"] = outcome.header
-            latest["last_error"] = None
-        counters["refresh_published"] += 1
-        print(
-            json.dumps(
-                {
-                    "refresh": outcome.frame_id,
-                    "splats": outcome.splat_count,
-                    "ms": {key: round(value, 1) for key, value in outcome.timings_ms.items()},
-                    "mask_area": round(float(outcome.mask.area_fraction), 3),
-                }
-            ),
-            flush=True,
-        )
+        def publish() -> None:
+            state.publish_snapshot(
+                outcome.header,
+                outcome.buffer,
+                pose_depth=pose_depth,
+                mask=outcome.mask.mask,
+                pose_joints=outcome.pose_joints,
+            )
+            with lock:
+                latest["outcome_header"] = outcome.header
+                latest["last_error"] = None
+            counters["refresh_published"] += 1
+            print(
+                json.dumps(
+                    {
+                        "refresh": outcome.frame_id,
+                        "splats": outcome.splat_count,
+                        "ms": {key: round(value, 1) for key, value in outcome.timings_ms.items()},
+                        "mask_area": round(float(outcome.mask.area_fraction), 3),
+                    }
+                ),
+                flush=True,
+            )
+
+        # RT-0026 item 3: validation and publication share one generation
+        # boundary. A run change cannot occur between them.
+        if not run_guard.publish_if_current(job_generation, publish):
+            counters["refresh_discarded_stale"] += 1
+            return
 
     dispatcher = RefreshDispatcher(
         refresh_worker,
@@ -242,7 +256,7 @@ def main() -> None:
         nonlocal window, window_start_capture, window_started_wall, window_generation_value
         if not window:
             return
-        if window_generation_value != selector.generation:
+        if window_generation_value != run_guard.generation:
             # A capture run changed while this window was open. Drop it; the new
             # run starts from a bootstrap window, never from old candidates.
             counters["windows_discarded_generation"] += 1
@@ -293,7 +307,7 @@ def main() -> None:
     started = time.monotonic()
     last_packet_identity: tuple[str, tuple[int, int], int, str] | None = None
     last_reconnect_count = int(handler.metrics.reconnect_count)
-    window_generation_value = selector.generation
+    window_generation_value = run_guard.generation
     handler.start()
     server_thread.start()
     print(f"Integrated app: http://127.0.0.1:{args.port}/  (Ctrl+C stops)", flush=True)
@@ -305,6 +319,7 @@ def main() -> None:
                 # A new capture run after a source reopen or a resolution change
                 # resets the retained reference, the active state identity, and
                 # any motion, so no flow or warp spans two runs.
+                generation_before = run_guard.generation
                 reconnect_now = int(handler.metrics.reconnect_count)
                 if reconnect_now != last_reconnect_count:
                     # A live OpenCV source has no source timestamp, so a reopen
@@ -321,6 +336,12 @@ def main() -> None:
                         or str(packet.timestamp_origin) != previous[3]
                     ):
                         advance_generation("identity_change")
+                if run_guard.generation != generation_before:
+                    # This packet may predate the run change (it was already
+                    # dequeued). Drop it; the drain in advance_generation
+                    # removed the rest of the old queue.
+                    counters["packets_discarded_run"] += 1
+                    continue
                 last_packet_identity = (
                     packet.source_id,
                     (packet.width, packet.height),
@@ -333,7 +354,7 @@ def main() -> None:
                 if window_start_capture is None:
                     window_start_capture = int(packet.capture_timestamp_ns)
                     window_started_wall = time.monotonic()
-                    window_generation_value = selector.generation
+                    window_generation_value = run_guard.generation
                 if int(packet.capture_timestamp_ns) - window_start_capture >= window_ns:
                     flush_window()
             else:
