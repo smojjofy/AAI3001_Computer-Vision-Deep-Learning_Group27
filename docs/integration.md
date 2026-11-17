@@ -182,6 +182,19 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   diagnostics. `advance_generation()` publishes a boundary diagnostics snapshot
   immediately, so `/api/diagnostics` cannot serve the previous run's action,
   splat, or error.
+- **Delayed responses across a clear (RT-0034).** The viewer keeps a display
+  epoch. A clear runs when the display has data, a retry is pending, or a splat,
+  mask, or pose-depth request is in flight. A response that started before the
+  clear is discarded, including a pose-depth decode failure that would schedule
+  a retry. A diagnostics poll that spans a clear is discarded as a whole, and a
+  poll whose diagnostics have no active state skips its motion and pose-depth
+  results. `src/api/displayGuard.ts` holds these decisions and
+  `npm run check:identity` exercises the delayed-response cases.
+- **Screenshots use Firefox (RT-0034).** `applications/gui/tools/capture-screenshot.ps1`
+  now calls `capture-firefox.py`, which runs headless Firefox through Selenium
+  with an isolated temporary profile. The earlier Edge/DevTools helper stopped
+  every running Microsoft Edge process, including the user's own browser, and
+  is removed.
 - **Mask display versus request (RT-0032).** The viewer stores the response
   identity that produced the displayed mask (`maskDisplayedKey`) separately
   from the requested identity it settled (`maskSatisfiedKey`).

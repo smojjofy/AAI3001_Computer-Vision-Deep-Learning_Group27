@@ -59,9 +59,18 @@ npx tsc --noEmit
 npm run build
 ```
 
-`tools/capture-screenshot.ps1` captures the running page with headless Edge over
-the DevTools Protocol (start Edge with a remote debugging port, `Page.navigate`,
-wait real time, `Page.captureScreenshot`). For example:
+`tools/capture-screenshot.ps1` captures the running page with headless Firefox
+through Selenium. Firefox starts with an isolated temporary profile, so a
+capture never touches the user's own browser. The helper waits until the page
+shows a live frame, waits real time, optionally clicks a tab, and saves a PNG.
+It replaces the earlier Edge/DevTools capture, which stopped every running
+Microsoft Edge process. Install the Python dependency once:
+
+```powershell
+..\..\.venv\Scripts\python.exe -m pip install selenium
+```
+
+For example:
 
 ```powershell
 ./tools/capture-screenshot.ps1 -Url http://127.0.0.1:5180/ `

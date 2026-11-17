@@ -11,6 +11,11 @@ import {
 } from './api/liveApi'
 
 import {
+  shouldApplyAuxiliary,
+  shouldApplyResponse,
+  shouldClearDisplayedState,
+} from './api/displayGuard'
+import {
   isKeyAtLeast,
   needsMaskFetch,
   retryDelayMs,
@@ -253,7 +258,9 @@ function clearDisplayedState(): void {
     splatRetryTimer !== null ||
     maskRetryTimer !== null ||
     poseDepthRetryTimer !== null
-  if (!hasDisplayedOrPending) {
+  const inFlightCount =
+    (splatFetchInFlight ? 1 : 0) + (maskFetchInFlight ? 1 : 0) + (poseDepthFetchInFlight ? 1 : 0)
+  if (!shouldClearDisplayedState(hasDisplayedOrPending, inFlightCount)) {
     return
   }
   // Invalidate in-flight requests even when the display is already empty: a
@@ -305,7 +312,7 @@ async function refreshSplat(key: string): Promise<void> {
   const fetchEpoch = displayEpoch
   try {
     const result = await fetchSplat()
-    if (displayEpoch !== fetchEpoch) {
+    if (!shouldApplyResponse(fetchEpoch, displayEpoch)) {
       // The display was cleared while this request ran. Do not restore the
       // previous run's splat.
       return
@@ -387,7 +394,7 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
   const fetchEpoch = displayEpoch
   try {
     const result = await fetchMask()
-    if (displayEpoch !== fetchEpoch) {
+    if (!shouldApplyResponse(fetchEpoch, displayEpoch)) {
       // A clear invalidated this mask request.
       return
     }
@@ -476,6 +483,10 @@ async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
     frameProcessorPanel.setDepthFrame(image, poseDepth)
     poseDepthRetryAt = 0
   } catch {
+    if (!shouldApplyResponse(fetchEpoch, displayEpoch)) {
+      // A clear invalidated this frame; do not start an old-run retry.
+      return
+    }
     frameProcessorPanel.setDepthFrame(null, poseDepth)
     poseDepthRetryAt = performance.now() + 500
     poseDepthPending = poseDepth
@@ -557,7 +568,7 @@ async function pollState(): Promise<void> {
     fetchMotion(),
     fetchPoseDepth(),
   ])
-  if (displayEpoch !== pollEpoch) {
+  if (!shouldApplyResponse(pollEpoch, displayEpoch)) {
     // A boundary clear happened while these requests were in flight. Discard
     // their results: diagnostics, motion, and pose-depth from one poll could
     // otherwise restore old-run data after the clear.
@@ -604,6 +615,17 @@ async function pollState(): Promise<void> {
       // state so old splats, mask, or depth cannot outlive their run.
       clearDisplayedState()
     }
+    const hasActiveState = splatFrameId !== null && activeIdentity !== null
+    if (!shouldApplyAuxiliary(hasActiveState) || !shouldApplyResponse(pollEpoch, displayEpoch)) {
+      // This poll has no active state, or a clear ran during it. Motion and
+      // pose-depth results from it belong to the old run: skip them and poll
+      // again instead of applying old data.
+      applyStatus()
+      window.setTimeout(() => {
+        void pollState()
+      }, STATE_POLL_MS)
+      return
+    }
     // The server latches the invalid-person event. Anchor it once on the
     // viewer clock; the browser then owns the hold and fade. Do not clear the
     // clock from a null age: the old splats would regain full alpha too early.
@@ -612,6 +634,12 @@ async function pollState(): Promise<void> {
     inferencePanel.update(null)
     pipelineHealth =
       diagnosticsResult.kind === 'error' ? 'disconnected' : 'waiting'
+    // A poll without diagnostics cannot prove the run is still the same.
+    applyStatus()
+    window.setTimeout(() => {
+      void pollState()
+    }, STATE_POLL_MS)
+    return
   }
 
   if (motionResult.kind === 'ok') {

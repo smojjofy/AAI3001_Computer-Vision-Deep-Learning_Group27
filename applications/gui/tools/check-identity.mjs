@@ -8,7 +8,7 @@
  * Run from applications/gui:
  *   npm run check:identity
  * or, directly:
- *   npx tsc src/api/identity.ts --ignoreConfig --outDir .tmp-identity --target es2022 --module es2022
+ *   npx tsc src/api/identity.ts src/api/displayGuard.ts --ignoreConfig --outDir .tmp-identity --target es2022 --module es2022
  *   node tools/check-identity.mjs
  *
  * `--ignoreConfig` is required because tsconfig.json exists and TypeScript
@@ -16,9 +16,14 @@
  */
 import { readFileSync } from 'node:fs'
 
-const source = readFileSync(new URL('./../.tmp-identity/identity.js', import.meta.url), 'utf8')
-const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
-const { splatKey, isKeyAtLeast, retryDelayMs, needsMaskFetch, settleMaskIdentity } = module
+async function loadModule(name) {
+  const source = readFileSync(new URL(`./../.tmp-identity/${name}.js`, import.meta.url), 'utf8')
+  return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
+}
+const identity = await loadModule('identity')
+const guard = await loadModule('displayGuard')
+const { splatKey, isKeyAtLeast, retryDelayMs, needsMaskFetch, settleMaskIdentity } = identity
+const { shouldClearDisplayedState, shouldApplyResponse, shouldApplyAuxiliary } = guard
 
 let failures = 0
 function check(name, condition) {
@@ -66,3 +71,33 @@ if (failures > 0) {
   process.exit(1)
 }
 console.log('all identity checks passed')
+
+// Delayed responses across a run clear (RT-0034). The epoch is 0 while a
+// request is in flight; the boundary clear must invalidate it even when no
+// displayed or pending key exists.
+{
+  const epochBefore = 7
+  const inFlightOnlyClear = shouldClearDisplayedState(false, 1)
+  check('a clear runs when only a request is in flight', inFlightOnlyClear === true)
+  const epochAfter = inFlightOnlyClear ? epochBefore + 1 : epochBefore
+  check('the delayed splat response is discarded', shouldApplyResponse(epochBefore, epochAfter) === false)
+  check('the delayed mask response is discarded', shouldApplyResponse(epochBefore, epochAfter) === false)
+  check('the delayed pose-depth response is discarded', shouldApplyResponse(epochBefore, epochAfter) === false)
+  check('the delayed pose-depth decode failure is discarded', shouldApplyResponse(epochBefore, epochAfter) === false)
+}
+
+// A poll that spans a clear is discarded as a whole.
+{
+  const pollEpoch = 3
+  const currentEpoch = 4
+  check('a poll that spans a clear does not apply motion or depth', shouldApplyResponse(pollEpoch, currentEpoch) === false)
+  check('a current poll applies normally', shouldApplyResponse(4, 4) === true)
+}
+
+// Auxiliary results from a poll without an active state are skipped.
+check('no active state skips motion and depth', shouldApplyAuxiliary(false) === false)
+check('an active state applies motion and depth', shouldApplyAuxiliary(true) === true)
+
+// An idle clear has nothing to invalidate.
+check('an idle clear does nothing', shouldClearDisplayedState(false, 0) === false)
+check('displayed state always clears', shouldClearDisplayedState(true, 0) === true)
