@@ -514,6 +514,35 @@ export class SplatOutputPanel {
     this.setMotionWarp(null)
   }
 
+  /**
+   * Drop the displayed splat state, for example at a capture-run boundary.
+   * The next published state rebuilds the scene and re-fits the orbit camera.
+   */
+  clearState(message = 'Waiting for the first refresh of this run'): void {
+    if (this.activeSplat !== null && this.scene !== null) {
+      this.scene.removeObject(this.activeSplat)
+    }
+    this.activeSplat = null
+    this.pendingDescriptor = null
+    this.basePositions = null
+    this.sourcePixels = null
+    this.pendingOpacityLogits = null
+    this.splatCount = 0
+    this.activeFrameId = null
+    this.activeIdentity = null
+    this.activeMotion = null
+    this.bodyFactors = null
+    this.warpDirty = false
+    this.hasFitted = false
+    this.displayAlpha = 1
+    this.lossAnchorMs = null
+    this.alphaLabel.textContent = 'Alpha: 1.00'
+    this.frameLabel.textContent = 'Frame: --'
+    this.splatLabel.textContent = 'Splats: --'
+    this.showPlaceholder(message)
+    this.updateStatus()
+  }
+
   private updateStatus(): void {
     if (this.lastError.length > 0) {
       this.statusLabel.textContent = `ERROR: ${this.lastError}`

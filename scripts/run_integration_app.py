@@ -126,7 +126,14 @@ def main() -> None:
         packet_tracker.reset()
         selector.set_generation(generation)
         pipeline.generation = generation
-        state.publish_motion(None)
+        # The new run has no valid state yet. Drop the old snapshot, identity,
+        # loss latch, and motion, and clear the diagnostics that describe them,
+        # so a viewer cannot show old-run data beside the new run generation.
+        state.clear_active()
+        with lock:
+            latest["outcome_header"] = None
+            latest["last_error"] = None
+            latest["decision"] = None
         drained = drain_queue(handler.queue)
         if drained:
             counters["packets_discarded_run"] += 1

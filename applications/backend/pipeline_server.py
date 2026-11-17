@@ -177,6 +177,25 @@ class PipelineState:
         with self._lock:
             return self.motion
 
+    def clear_active(self) -> None:
+        """Drop the displayed state at a capture-run boundary.
+
+        A new run has no valid state yet. Clearing the snapshot, identity, loss
+        latch, and motion prevents a viewer from showing the old run beside the
+        new run's generation. A new refresh repopulates it.
+        """
+        with self._lock:
+            self.splat_header = None
+            self.splat_buffer = b""
+            self.pose_depth = None
+            self.mask_png = None
+            self.pose_joints = None
+            self.motion = None
+            self.active_identity = None
+            self.person_lost_mono_ns = None
+            self.last_invalid_person_mono_ns = None
+            self.last_publish_wall_ns = 0
+
     def publish_diagnostics(self, payload: dict[str, Any]) -> None:
         with self._lock:
             self.diagnostics = payload

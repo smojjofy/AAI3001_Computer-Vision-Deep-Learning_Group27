@@ -162,6 +162,15 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   timestamp-origin, and backward-time changes. `advance_generation` resets the
   tracker, and the next packet becomes the new baseline; one permanent change
   cannot cause a run change on every following packet.
+- **Run boundary clears the display (RT-0030).** `advance_generation` calls
+  `PipelineState.clear_active()` and clears the local decision, outcome header,
+  and error. The browser also clears its displayed splat, mask, depth, motion,
+  and loss clock when diagnostics report no active state. A new run starts
+  empty and repopulates only through a new refresh.
+- **Mask satisfaction (RT-0030).** The viewer records the requested identity as
+  satisfied separately from the displayed identity. If the server keeps
+  returning an older mask after three retries, the viewer accepts it once,
+  warns, and does not request it again until the active identity changes.
 - **Per-run counters (RT-0028).** Diagnostics report `RunCounters` for the
   current generation, reset on a run change. A stale success or failure cannot
   change the current run's `refresh_count` or `refresh_failures`.

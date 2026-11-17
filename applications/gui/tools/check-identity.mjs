@@ -2,18 +2,23 @@
  * Focused checks for the pure identity helpers used by the viewer.
  *
  * These helpers decide whether a fetched state belongs to the state the viewer
- * asked for (RT-0028 items 1 and 4). They are pure, so they are checked here
- * without a browser.
+ * asked for (RT-0028 items 1 and 4, RT-0030 item 2). They are pure, so they are
+ * checked here without a browser.
  *
  * Run from applications/gui:
- *   npx tsc src/api/identity.ts --outDir .tmp-identity --target es2022 --module es2022
+ *   npm run check:identity
+ * or, directly:
+ *   npx tsc src/api/identity.ts --ignoreConfig --outDir .tmp-identity --target es2022 --module es2022
  *   node tools/check-identity.mjs
+ *
+ * `--ignoreConfig` is required because tsconfig.json exists and TypeScript
+ * refuses a file list otherwise (TS5112).
  */
 import { readFileSync } from 'node:fs'
 
 const source = readFileSync(new URL('./../.tmp-identity/identity.js', import.meta.url), 'utf8')
 const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
-const { splatKey, isKeyAtLeast, retryDelayMs } = module
+const { splatKey, isKeyAtLeast, retryDelayMs, needsMaskFetch } = module
 
 let failures = 0
 function check(name, condition) {
@@ -39,6 +44,13 @@ check('frame id 0 is not confused with the counter form', splatKey('camera', 2, 
 check('delay is the remaining time', retryDelayMs(1000, 700) === 300)
 check('delay is never negative', retryDelayMs(1000, 1500) === 0)
 check('failure retry is 500 ms', retryDelayMs(1500, 1000) === 500)
+
+// A satisfied request is not fetched again, even when the server stayed stale.
+check('satisfied active key needs no fetch', needsMaskFetch(active, active, null) === false)
+check('new active identity needs a fetch', needsMaskFetch(splatKey('camera', 2, 43), active, null) === true)
+check('pending key is not requested twice', needsMaskFetch(active, null, active) === false)
+check('no active identity needs no fetch', needsMaskFetch(null, null, null) === false)
+check('old satisfied key does not block a later frame', needsMaskFetch(active, splatKey('camera', 2, 41), null) === true)
 
 if (failures > 0) {
   console.error(`${failures} identity check(s) failed`)

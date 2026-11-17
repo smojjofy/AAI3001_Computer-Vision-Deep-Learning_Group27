@@ -199,3 +199,30 @@ def test_splat_response_reports_loss_without_forcing_alpha() -> None:
     # The browser owns the hold and fade; the server keeps full alpha.
     assert payload["display_alpha"] == 1.0
     assert payload["active_identity"]["frame_id"] == IDENTITY_FRAME
+
+
+def test_clear_active_drops_the_old_run_state() -> None:
+    # RT-0030 item 1: a run change must not leave an old snapshot, identity,
+    # loss latch, or motion beside the new run generation.
+    state = PipelineState()
+    publish(state)
+    state.publish_motion(motion(9, IDENTITY_FRAME))
+    state.note_invalid_person()
+    assert state.splat_response() is not None
+    assert state.mask_response() is not None
+    assert state.get_pose_depth() is not None
+    assert state.get_motion() is not None
+    assert state.get_diagnostics()["person_lost"] is True
+
+    state.clear_active()
+
+    assert state.splat_response() is None
+    assert state.mask_response() is None
+    assert state.get_pose_depth() is None
+    assert state.get_pose_joints() is None
+    assert state.get_active_identity() is None
+    assert state.get_motion() is None
+    diagnostics = state.get_diagnostics()
+    assert diagnostics["person_lost"] is False
+    assert diagnostics["person_loss_age_ms"] is None
+    assert diagnostics["active_identity"] is None

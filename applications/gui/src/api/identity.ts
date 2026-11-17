@@ -32,6 +32,24 @@ export function retryDelayMs(deadline: number, now: number): number {
   return Math.max(0, deadline - now)
 }
 
+/**
+ * True when the viewer must request a mask for the active state.
+ *
+ * `satisfiedKey` is the requested identity that a completed fetcher has
+ * covered, even when the server kept returning an older mask. Without it, a
+ * fixed stale response would be requested again on every poll.
+ */
+export function needsMaskFetch(
+  activeKey: string | null,
+  satisfiedKey: string | null,
+  pendingKey: string | null,
+): boolean {
+  if (activeKey === null) {
+    return false
+  }
+  return activeKey !== satisfiedKey && activeKey !== pendingKey
+}
+
 /** Identity part of a fetch key, for display and logging. */
 export function identityDescription(key: string): string {
   const [sourceId, generation, frameId] = key.split('|')

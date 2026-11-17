@@ -10,7 +10,7 @@ import {
   fetchSplat,
 } from './api/liveApi'
 
-import { isKeyAtLeast, retryDelayMs, splatKey } from './api/identity'
+import { isKeyAtLeast, needsMaskFetch, retryDelayMs, splatKey } from './api/identity'
 import { FrameProcessorPanel } from './components/FrameProcessorPanel'
 import { InferencePanel } from './components/InferencePanel'
 import { OriginalInputPanel } from './components/OriginalInputPanel'
@@ -89,7 +89,8 @@ let splatFetchInFlight = false
 let splatRetryAt = 0
 let splatRetryTimer: number | null = null
 
-let maskRenderedKey: string | null = null
+/** Requested identity a completed mask fetch has covered, even if stale. */
+let maskSatisfiedKey: string | null = null
 let maskPendingKey: string | null = null
 let maskPendingCount: number | null = null
 let lastMaskRefreshCount = -1
@@ -97,6 +98,7 @@ let maskFetchInFlight = false
 let maskRetryAt = 0
 let maskRetryTimer: number | null = null
 const maskStaleAttempts = new Map<string, number>()
+let displayedStateCleared = true
 
 let lastMotionFrameId: number | null = null
 let activeMotion: MotionPayload | null = null
@@ -225,6 +227,30 @@ function poseKey(pose: PoseDepthFrame): string {
   return splatKey(pose.source_id, generation, pose.frame_id)
 }
 
+function clearDisplayedState(): void {
+  if (displayedStateCleared) {
+    return
+  }
+  displayedStateCleared = true
+  splatOutputPanel.clearState()
+  frameProcessorPanel.setMaskImage(null, null)
+  frameProcessorPanel.setDepthFrame(null, null)
+  frameProcessorPanel.setMotion(null)
+  splatOutputPanel.setMotionWarp(null)
+  activeMotion = null
+  lastMotionFrameId = null
+  splatRenderedKey = null
+  splatPendingKey = null
+  maskSatisfiedKey = null
+  maskPendingKey = null
+  poseDepthRenderedKey = null
+  poseDepthPending = null
+  personLossAnchorMs = null
+  personLossGeneration = null
+  personLossLastFrameId = 0
+  splatOutputPanel.setPersonLoss(null)
+}
+
 async function refreshSplat(key: string): Promise<void> {
   if (splatFetchInFlight) {
     splatPendingKey = key
@@ -246,6 +272,7 @@ async function refreshSplat(key: string): Promise<void> {
         Number(header.generation ?? 0),
         header.frame_id,
       )
+      displayedStateCleared = false
       splatRenderedKey = rendered
       splatRenderedGeneration = Number(header.generation ?? 0)
       splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
@@ -260,7 +287,7 @@ async function refreshSplat(key: string): Promise<void> {
       }
       splatRetryAt = 0
     } else if (result.kind === 'empty') {
-      splatRenderedKey = null
+      clearDisplayedState()
     } else {
       console.warn(`Splat fetch failed: ${result.error}`)
       splatRetryAt = performance.now() + 500
@@ -337,7 +364,7 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
         }
         console.warn(`Mask identity ${identityKey} is older than ${requested}; accepting after 3 tries`)
       }
-      maskRenderedKey = identityKey ?? requested
+      maskSatisfiedKey = requested
       maskStaleAttempts.clear()
       frameProcessorPanel.setMaskImage(result.data.bitmap, { refreshCount })
       maskRetryAt = 0
@@ -352,7 +379,7 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
     maskFetchInFlight = false
   }
   const next = maskPendingKey
-  if (next !== null && next !== maskRenderedKey) {
+  if (next !== null && next !== maskSatisfiedKey) {
     const nextCount = maskPendingCount ?? refreshCount
     maskPendingKey = null
     maskPendingCount = null
@@ -497,11 +524,16 @@ async function pollState(): Promise<void> {
           activeIdentity.generation,
           activeIdentity.frame_id,
         )
-        if (maskKey !== maskRenderedKey && maskKey !== maskPendingKey) {
+        if (needsMaskFetch(maskKey, maskSatisfiedKey, maskPendingKey)) {
           lastMaskRefreshCount = diagnostics.refresh_count
           void refreshMask(maskKey, diagnostics.refresh_count)
         }
       }
+    }
+    if (splatFrameId === null || activeIdentity === null) {
+      // A run boundary clears the server snapshot. Drop the displayed run's
+      // state so old splats, mask, or depth cannot outlive their run.
+      clearDisplayedState()
     }
     // The server latches the invalid-person event. Anchor it once on the
     // viewer clock; the browser then owns the hold and fade. Do not clear the

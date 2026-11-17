@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:identity": "tsc src/api/identity.ts --ignoreConfig --outDir .tmp-identity --target es2022 --module es2022 && node tools/check-identity.mjs"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
