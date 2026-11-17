@@ -167,6 +167,24 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   and error. The browser also clears its displayed splat, mask, depth, motion,
   and loss clock when diagnostics report no active state. A new run starts
   empty and repopulates only through a new refresh.
+- **Boundary diagnostic (RT-0032).** `scripts/check_run_boundary.py`
+  verifies a run boundary against a running app: the first new-generation
+  diagnostics sample must have no active identity, no error, and zero new-run
+  refreshes; `/api/splat` and `/api/mask` must return 204; the first published
+  state must belong to the new generation. Run the app with
+  `--force-run-change-after-s N` to exercise the boundary without a camera
+  reconnect.
+- **Response invalidation (RT-0032).** The viewer keeps a display epoch. A
+  boundary clear increments it and clears pending keys and retry timers. Any
+  splat, mask, or pose-depth response, or a whole diagnostics poll, that started
+  before the clear is discarded, so an old response cannot restore old-run data.
+- **Boundary diagnostics (RT-0032).** `clear_active()` also clears the stored
+  diagnostics. `advance_generation()` publishes a boundary diagnostics snapshot
+  immediately, so `/api/diagnostics` cannot serve the previous run's action,
+  splat, or error.
+- **Mask display versus request (RT-0032).** The viewer stores the response
+  identity that produced the displayed mask (`maskDisplayedKey`) separately
+  from the requested identity it settled (`maskSatisfiedKey`).
 - **Mask satisfaction (RT-0030).** The viewer records the requested identity as
   satisfied separately from the displayed identity. If the server keeps
   returning an older mask after three retries, the viewer accepts it once,

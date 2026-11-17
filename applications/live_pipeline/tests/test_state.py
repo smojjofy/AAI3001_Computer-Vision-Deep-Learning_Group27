@@ -226,3 +226,26 @@ def test_clear_active_drops_the_old_run_state() -> None:
     assert diagnostics["person_lost"] is False
     assert diagnostics["person_loss_age_ms"] is None
     assert diagnostics["active_identity"] is None
+
+
+def test_clear_active_clears_stored_diagnostics() -> None:
+    # RT-0032 item 2: a run boundary must not serve the previous run's action,
+    # splat summary, or error.
+    state = PipelineState()
+    publish(state)
+    state.publish_diagnostics(
+        {
+            "schema_version": "1.0",
+            "action": "refresh",
+            "splat": {"frame_id": "3", "count": 10},
+            "last_error": "old run error",
+            "run_generation": 0,
+        }
+    )
+    state.clear_active()
+    diagnostics = state.get_diagnostics()
+    assert "action" not in diagnostics
+    assert "splat" not in diagnostics
+    assert "last_error" not in diagnostics
+    assert diagnostics["active_identity"] is None
+    assert diagnostics["person_lost"] is False

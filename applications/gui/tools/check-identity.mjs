@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs'
 
 const source = readFileSync(new URL('./../.tmp-identity/identity.js', import.meta.url), 'utf8')
 const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
-const { splatKey, isKeyAtLeast, retryDelayMs, needsMaskFetch } = module
+const { splatKey, isKeyAtLeast, retryDelayMs, needsMaskFetch, settleMaskIdentity } = module
 
 let failures = 0
 function check(name, condition) {
@@ -51,6 +51,15 @@ check('new active identity needs a fetch', needsMaskFetch(splatKey('camera', 2, 
 check('pending key is not requested twice', needsMaskFetch(active, null, active) === false)
 check('no active identity needs no fetch', needsMaskFetch(null, null, null) === false)
 check('old satisfied key does not block a later frame', needsMaskFetch(active, splatKey('camera', 2, 41), null) === true)
+
+// A settled stale response stores both the displayed and the satisfied key.
+const staleSettled = settleMaskIdentity(active, splatKey('camera', 2, 41))
+check('displayed key names the stale response', staleSettled.displayedKey === splatKey('camera', 2, 41))
+check('satisfied key names the request', staleSettled.satisfiedKey === active)
+check('a settled stale response is not requested again', needsMaskFetch(active, staleSettled.satisfiedKey, null) === false)
+const freshSettled = settleMaskIdentity(splatKey('camera', 2, 43), splatKey('camera', 2, 43))
+check('a fresh response displays its own identity', freshSettled.displayedKey === freshSettled.satisfiedKey)
+check('a missing response identity falls back to the request', settleMaskIdentity(active, null).displayedKey === active)
 
 if (failures > 0) {
   console.error(`${failures} identity check(s) failed`)

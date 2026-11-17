@@ -85,6 +85,12 @@ def main() -> None:
     parser.add_argument("--device-inference", default="auto", help="Torch device for YOLO depth")
     parser.add_argument("--duration-s", type=float, default=0.0, help="0 runs until Ctrl+C")
     parser.add_argument("--summary-json", type=Path, default=None, help="Write the final summary here")
+    parser.add_argument(
+        "--force-run-change-after-s",
+        type=float,
+        default=0.0,
+        help="Diagnostic: start one new capture run after this many seconds, to test run boundaries. 0 disables it.",
+    )
     args = parser.parse_args()
 
     state = PipelineState()
@@ -142,6 +148,10 @@ def main() -> None:
         window_started_wall = None
         counters["run_generation_changes"] += 1
         counters[f"run_change_{reason}"] += 1
+        # Publish boundary diagnostics immediately, so /api/diagnostics cannot
+        # serve the previous run's action, splat, or error before the next
+        # window publishes.
+        publish_diagnostics()
         print(json.dumps({"run_generation": generation, "reason": reason}), flush=True)
 
     def publish_diagnostics() -> None:
@@ -321,11 +331,17 @@ def main() -> None:
     started = time.monotonic()
     last_reconnect_count = int(handler.metrics.reconnect_count)
     window_generation_value = run_guard.generation
+    force_change_after_s = max(0.0, args.force_run_change_after_s)
+    force_change_done = force_change_after_s <= 0.0
     handler.start()
     server_thread.start()
     print(f"Integrated app: http://127.0.0.1:{args.port}/  (Ctrl+C stops)", flush=True)
     try:
         while time.monotonic() < deadline:
+            if not force_change_done and time.monotonic() - started >= force_change_after_s:
+                force_change_done = True
+                advance_generation("forced_test")
+                counters["forced_run_changes"] += 1
             packet = handler.queue.get(timeout_s=0.02)
             if packet is not None:
                 counters["frames"] += 1

@@ -10,7 +10,13 @@ import {
   fetchSplat,
 } from './api/liveApi'
 
-import { isKeyAtLeast, needsMaskFetch, retryDelayMs, splatKey } from './api/identity'
+import {
+  isKeyAtLeast,
+  needsMaskFetch,
+  retryDelayMs,
+  settleMaskIdentity,
+  splatKey,
+} from './api/identity'
 import { FrameProcessorPanel } from './components/FrameProcessorPanel'
 import { InferencePanel } from './components/InferencePanel'
 import { OriginalInputPanel } from './components/OriginalInputPanel'
@@ -98,7 +104,13 @@ let maskFetchInFlight = false
 let maskRetryAt = 0
 let maskRetryTimer: number | null = null
 const maskStaleAttempts = new Map<string, number>()
-let displayedStateCleared = true
+/** Identity of the response whose mask is displayed. */
+let maskDisplayedKey: string | null = null
+/**
+ * Bumped whenever the displayed run state is cleared. An in-flight response
+ * from an older epoch is discarded instead of restoring old-run data.
+ */
+let displayEpoch = 0
 
 let lastMotionFrameId: number | null = null
 let activeMotion: MotionPayload | null = null
@@ -228,10 +240,34 @@ function poseKey(pose: PoseDepthFrame): string {
 }
 
 function clearDisplayedState(): void {
-  if (displayedStateCleared) {
+  const hasDisplayedOrPending =
+    splatRenderedKey !== null ||
+    splatPendingKey !== null ||
+    maskDisplayedKey !== null ||
+    maskSatisfiedKey !== null ||
+    maskPendingKey !== null ||
+    poseDepthRenderedKey !== null ||
+    poseDepthPending !== null ||
+    activeMotion !== null ||
+    personLossAnchorMs !== null ||
+    splatRetryTimer !== null ||
+    maskRetryTimer !== null ||
+    poseDepthRetryTimer !== null
+  if (!hasDisplayedOrPending) {
     return
   }
-  displayedStateCleared = true
+  // Invalidate in-flight requests even when the display is already empty: a
+  // response from an older run can arrive after the clear and must not restore
+  // old data.
+  displayEpoch += 1
+  for (const timer of [splatRetryTimer, maskRetryTimer, poseDepthRetryTimer]) {
+    if (timer !== null) {
+      window.clearTimeout(timer)
+    }
+  }
+  splatRetryTimer = null
+  maskRetryTimer = null
+  poseDepthRetryTimer = null
   splatOutputPanel.clearState()
   frameProcessorPanel.setMaskImage(null, null)
   frameProcessorPanel.setDepthFrame(null, null)
@@ -242,7 +278,10 @@ function clearDisplayedState(): void {
   splatRenderedKey = null
   splatPendingKey = null
   maskSatisfiedKey = null
+  maskDisplayedKey = null
   maskPendingKey = null
+  maskStaleAttempts.clear()
+  maskRetryAt = 0
   poseDepthRenderedKey = null
   poseDepthPending = null
   personLossAnchorMs = null
@@ -263,8 +302,14 @@ async function refreshSplat(key: string): Promise<void> {
   }
   splatFetchInFlight = true
   splatPendingKey = null
+  const fetchEpoch = displayEpoch
   try {
     const result = await fetchSplat()
+    if (displayEpoch !== fetchEpoch) {
+      // The display was cleared while this request ran. Do not restore the
+      // previous run's splat.
+      return
+    }
     if (result.kind === 'ok') {
       const header = result.data.header
       const rendered = splatKey(
@@ -272,7 +317,6 @@ async function refreshSplat(key: string): Promise<void> {
         Number(header.generation ?? 0),
         header.frame_id,
       )
-      displayedStateCleared = false
       splatRenderedKey = rendered
       splatRenderedGeneration = Number(header.generation ?? 0)
       splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
@@ -340,8 +384,13 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
   const requested = key
   maskPendingKey = null
   maskPendingCount = null
+  const fetchEpoch = displayEpoch
   try {
     const result = await fetchMask()
+    if (displayEpoch !== fetchEpoch) {
+      // A clear invalidated this mask request.
+      return
+    }
     if (result.kind === 'ok') {
       // The mask headers carry the identity of the state that produced the
       // image. Never display a mask older than the requested state; retry once
@@ -364,7 +413,9 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
         }
         console.warn(`Mask identity ${identityKey} is older than ${requested}; accepting after 3 tries`)
       }
-      maskSatisfiedKey = requested
+      const settled = settleMaskIdentity(requested, identityKey)
+      maskDisplayedKey = settled.displayedKey
+      maskSatisfiedKey = settled.satisfiedKey
       maskStaleAttempts.clear()
       frameProcessorPanel.setMaskImage(result.data.bitmap, { refreshCount })
       maskRetryAt = 0
@@ -415,8 +466,12 @@ async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
   }
   poseDepthFetchInFlight = true
   poseDepthPending = null
+  const fetchEpoch = displayEpoch
   try {
     const image = await decodeJpegBase64(poseDepth.depth_jpeg_base64)
+    if (displayEpoch !== fetchEpoch) {
+      return
+    }
     poseDepthRenderedKey = poseKey(poseDepth)
     frameProcessorPanel.setDepthFrame(image, poseDepth)
     poseDepthRetryAt = 0
@@ -496,11 +551,22 @@ function hasDiagnostics(payload: DiagnosticsPayload): boolean {
 }
 
 async function pollState(): Promise<void> {
+  const pollEpoch = displayEpoch
   const [diagnosticsResult, motionResult, poseDepthResult] = await Promise.all([
     fetchDiagnostics(),
     fetchMotion(),
     fetchPoseDepth(),
   ])
+  if (displayEpoch !== pollEpoch) {
+    // A boundary clear happened while these requests were in flight. Discard
+    // their results: diagnostics, motion, and pose-depth from one poll could
+    // otherwise restore old-run data after the clear.
+    applyStatus()
+    window.setTimeout(() => {
+      void pollState()
+    }, STATE_POLL_MS)
+    return
+  }
 
   if (diagnosticsResult.kind === 'ok' && hasDiagnostics(diagnosticsResult.data)) {
     const diagnostics = diagnosticsResult.data
@@ -524,7 +590,10 @@ async function pollState(): Promise<void> {
           activeIdentity.generation,
           activeIdentity.frame_id,
         )
-        if (needsMaskFetch(maskKey, maskSatisfiedKey, maskPendingKey)) {
+        // The satisfied key covers a settled request; the displayed key names
+        // the image actually shown. Either one can suppress a repeat request
+        // for the same active state.
+        if (needsMaskFetch(maskKey, maskSatisfiedKey ?? maskDisplayedKey, maskPendingKey)) {
           lastMaskRefreshCount = diagnostics.refresh_count
           void refreshMask(maskKey, diagnostics.refresh_count)
         }

@@ -195,6 +195,10 @@ class PipelineState:
             self.person_lost_mono_ns = None
             self.last_invalid_person_mono_ns = None
             self.last_publish_wall_ns = 0
+            # Diagnostics are also boundary-scoped: do not serve a previous
+            # run's action, splat summary, or error until the boundary snapshot
+            # is published.
+            self.diagnostics = {}
 
     def publish_diagnostics(self, payload: dict[str, Any]) -> None:
         with self._lock:
