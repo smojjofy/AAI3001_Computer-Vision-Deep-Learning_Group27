@@ -29,3 +29,83 @@ export function shouldApplyResponse(startEpoch: number, currentEpoch: number): b
 export function shouldApplyAuxiliary(hasActiveState: boolean): boolean {
   return hasActiveState
 }
+
+export interface ActiveIdentityLike {
+  source_id: string
+  generation: number
+  frame_id: number | string
+}
+
+export interface AuxiliaryIdentityLike {
+  source_id?: string
+  generation?: number
+  splat_frame_id?: number | string | null
+  frame_id?: number | string
+}
+
+/**
+ * True when an auxiliary response belongs to the active splat state.
+ *
+ * Diagnostics, motion, and pose-depth are separate HTTP responses. A mixed
+ * response order can pair an old motion or depth frame with a new active state.
+ * Compare source, generation, and the splat frame before a panel uses it.
+ */
+export function auxMatchesActive(
+  auxiliary: AuxiliaryIdentityLike | null,
+  active: ActiveIdentityLike | null,
+): boolean {
+  if (auxiliary === null || active === null) {
+    return false
+  }
+  if (auxiliary.source_id !== active.source_id) {
+    return false
+  }
+  if (Number(auxiliary.generation ?? 0) !== Number(active.generation)) {
+    return false
+  }
+  const auxiliaryFrame = auxiliary.splat_frame_id ?? auxiliary.frame_id
+  if (auxiliaryFrame === undefined || auxiliaryFrame === null) {
+    return false
+  }
+  return String(auxiliaryFrame) === String(active.frame_id)
+}
+
+/**
+ * True when a pose-depth image belongs to the active run and is not older than
+ * the active state. Separate responses can deliver an image that is newer than
+ * the diagnostics sample; a newer image is safe, an older one is not.
+ */
+export function auxIsCurrentOrNewer(
+  auxiliary: AuxiliaryIdentityLike | null,
+  active: ActiveIdentityLike | null,
+): boolean {
+  if (auxiliary === null || active === null) {
+    return false
+  }
+  if (auxiliary.source_id !== active.source_id) {
+    return false
+  }
+  if (Number(auxiliary.generation ?? 0) !== Number(active.generation)) {
+    return false
+  }
+  const auxiliaryFrame = auxiliary.splat_frame_id ?? auxiliary.frame_id
+  if (auxiliaryFrame === undefined || auxiliaryFrame === null) {
+    return false
+  }
+  return Number(auxiliaryFrame) >= Number(active.frame_id)
+}
+
+/** True when a splat request queued during a fetch should start now. */
+export function shouldDrainSplat(nextKey: string | null, renderedKey: string | null): boolean {
+  return nextKey !== null && nextKey !== renderedKey
+}
+
+/** True when a mask request queued during a fetch should start now. */
+export function shouldDrainMask(nextKey: string | null, satisfiedKey: string | null): boolean {
+  return nextKey !== null && nextKey !== satisfiedKey
+}
+
+/** True when a pose-depth request queued during a decode should start now. */
+export function shouldDrainPoseDepth(nextKey: string | null, renderedKey: string | null): boolean {
+  return nextKey !== null && nextKey !== renderedKey
+}

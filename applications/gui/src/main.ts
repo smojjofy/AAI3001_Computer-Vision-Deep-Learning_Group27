@@ -11,9 +11,14 @@ import {
 } from './api/liveApi'
 
 import {
+  auxIsCurrentOrNewer,
+  auxMatchesActive,
   shouldApplyAuxiliary,
   shouldApplyResponse,
   shouldClearDisplayedState,
+  shouldDrainMask,
+  shouldDrainPoseDepth,
+  shouldDrainSplat,
 } from './api/displayGuard'
 import {
   isKeyAtLeast,
@@ -28,6 +33,7 @@ import { OriginalInputPanel } from './components/OriginalInputPanel'
 import { SplatOutputPanel } from './components/SplatOutputPanel'
 
 import type {
+  ActiveStateIdentity,
   DiagnosticsPayload,
   MotionPayload,
   PoseDepthFrame,
@@ -297,6 +303,32 @@ function clearDisplayedState(): void {
   splatOutputPanel.setPersonLoss(null)
 }
 
+function drainSplatPending(): void {
+  const next = splatPendingKey
+  if (shouldDrainSplat(next, splatRenderedKey)) {
+    splatPendingKey = null
+    void refreshSplat(next as string)
+  }
+}
+
+function drainMaskPending(): void {
+  const next = maskPendingKey
+  if (shouldDrainMask(next, maskSatisfiedKey ?? maskDisplayedKey)) {
+    const count = maskPendingCount ?? lastMaskRefreshCount
+    maskPendingKey = null
+    maskPendingCount = null
+    void refreshMask(next as string, count)
+  }
+}
+
+function drainPoseDepthPending(): void {
+  const next = poseDepthPending
+  if (shouldDrainPoseDepth(next === null ? null : poseKey(next), poseDepthRenderedKey)) {
+    poseDepthPending = null
+    void refreshPoseDepth(next as PoseDepthFrame)
+  }
+}
+
 async function refreshSplat(key: string): Promise<void> {
   if (splatFetchInFlight) {
     splatPendingKey = key
@@ -352,11 +384,7 @@ async function refreshSplat(key: string): Promise<void> {
     scheduleSplatRetry()
   } finally {
     splatFetchInFlight = false
-  }
-  const next = splatPendingKey
-  if (next !== null && next !== splatRenderedKey) {
-    splatPendingKey = null
-    void refreshSplat(next)
+    drainSplatPending()
   }
 }
 
@@ -435,13 +463,7 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
     }
   } finally {
     maskFetchInFlight = false
-  }
-  const next = maskPendingKey
-  if (next !== null && next !== maskSatisfiedKey) {
-    const nextCount = maskPendingCount ?? refreshCount
-    maskPendingKey = null
-    maskPendingCount = null
-    void refreshMask(next, nextCount)
+    drainMaskPending()
   }
 }
 
@@ -476,28 +498,25 @@ async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
   const fetchEpoch = displayEpoch
   try {
     const image = await decodeJpegBase64(poseDepth.depth_jpeg_base64)
-    if (displayEpoch !== fetchEpoch) {
-      return
+    if (shouldApplyResponse(fetchEpoch, displayEpoch)) {
+      poseDepthRenderedKey = poseKey(poseDepth)
+      frameProcessorPanel.setDepthFrame(image, poseDepth)
+      poseDepthRetryAt = 0
     }
-    poseDepthRenderedKey = poseKey(poseDepth)
-    frameProcessorPanel.setDepthFrame(image, poseDepth)
-    poseDepthRetryAt = 0
+    // A discarded frame renders nothing; the finally drain still starts a
+    // newer queued request below.
   } catch {
-    if (!shouldApplyResponse(fetchEpoch, displayEpoch)) {
-      // A clear invalidated this frame; do not start an old-run retry.
-      return
+    if (shouldApplyResponse(fetchEpoch, displayEpoch)) {
+      frameProcessorPanel.setDepthFrame(null, poseDepth)
+      poseDepthRetryAt = performance.now() + 500
+      poseDepthPending = poseDepth
+      schedulePoseDepthRetry()
     }
-    frameProcessorPanel.setDepthFrame(null, poseDepth)
-    poseDepthRetryAt = performance.now() + 500
-    poseDepthPending = poseDepth
-    schedulePoseDepthRetry()
   } finally {
     poseDepthFetchInFlight = false
-  }
-  const next = poseDepthPending
-  if (next !== null && poseKey(next) !== poseDepthRenderedKey) {
-    poseDepthPending = null
-    void refreshPoseDepth(next)
+    // Always drain the newest request: a new-run request queued behind an old
+    // in-flight decode must start even when the old response was discarded.
+    drainPoseDepthPending()
   }
 }
 
@@ -579,13 +598,14 @@ async function pollState(): Promise<void> {
     return
   }
 
+  let activeIdentity: ActiveStateIdentity | null = null
   if (diagnosticsResult.kind === 'ok' && hasDiagnostics(diagnosticsResult.data)) {
     const diagnostics = diagnosticsResult.data
     pipelineHealth = diagnostics.stream_health
     inferencePanel.update(diagnostics)
 
     const splatFrameId = diagnostics.splat?.frame_id ?? null
-    const activeIdentity = diagnostics.active_identity ?? null
+    activeIdentity = diagnostics.active_identity ?? null
     if (splatFrameId !== null && activeIdentity !== null) {
       const key = splatKey(
         activeIdentity.source_id,
@@ -642,8 +662,10 @@ async function pollState(): Promise<void> {
     return
   }
 
-  if (motionResult.kind === 'ok') {
-    const motion = motionResult.data
+  // Diagnostics, motion, and pose-depth are separate responses. Only apply an
+  // auxiliary response that belongs to the active diagnostics state.
+  const motion = motionResult.kind === 'ok' ? motionResult.data : null
+  if (motion !== null && auxMatchesActive(motion, activeIdentity)) {
     const motionKey = motion.frame_id * 1_000_003 + (motion.reference_frame_id ?? 0) % 1000
     if (motionKey !== lastMotionFrameId) {
       lastMotionFrameId = motionKey
@@ -652,7 +674,8 @@ async function pollState(): Promise<void> {
       splatOutputPanel.setMotionWarp(motion)
     }
   } else if (lastMotionFrameId !== null) {
-    // 204: the refresh path replaced the reuse state, so clear the warp.
+    // 204 or an old-run response: clear the wander so it cannot pair with the
+    // new state.
     lastMotionFrameId = null
     activeMotion = null
     frameProcessorPanel.setMotion(null)
@@ -661,10 +684,17 @@ async function pollState(): Promise<void> {
 
   if (poseDepthResult.kind === 'ok') {
     const poseDepth = poseDepthResult.data
-    const key = poseKey(poseDepth)
-    const pendingKey = poseDepthPending === null ? null : poseKey(poseDepthPending)
-    if (key !== poseDepthRenderedKey && key !== pendingKey) {
-      void refreshPoseDepth(poseDepth)
+    if (auxIsCurrentOrNewer(poseDepth, activeIdentity)) {
+      const key = poseKey(poseDepth)
+      const pendingKey = poseDepthPending === null ? null : poseKey(poseDepthPending)
+      if (key !== poseDepthRenderedKey && key !== pendingKey) {
+        void refreshPoseDepth(poseDepth)
+      }
+    } else if (poseDepthRenderedKey !== null) {
+      // Old-run depth must not stay under the new state.
+      poseDepthRenderedKey = null
+      poseDepthPending = null
+      frameProcessorPanel.setDepthFrame(null, null)
     }
   } else if (poseDepthResult.kind === 'empty' && poseDepthRenderedKey !== null) {
     poseDepthRenderedKey = null

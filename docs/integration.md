@@ -190,6 +190,21 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   poll whose diagnostics have no active state skips its motion and pose-depth
   results. `src/api/displayGuard.ts` holds these decisions and
   `npm run check:identity` exercises the delayed-response cases.
+- **Queued request drain (RT-0036).** Every splat, mask, and pose-depth
+  completion drains the newest queued request in its `finally` block, including
+  a response discarded for an old epoch. A new-run request queued behind an
+  old in-flight request therefore still starts. The decisions are pure
+  (`shouldDrainSplat`, `shouldDrainMask`, `shouldDrainPoseDepth`).
+- **Auxiliary identity (RT-0036).** Motion and pose-depth are separate
+  responses from diagnostics. Motion applies only when its source, generation,
+  and `splat_frame_id` equal the active identity (`auxMatchesActive`). Pose-depth
+  applies when it is in the same run and not older than the active frame
+  (`auxIsCurrentOrNewer`). An old auxiliary response is cleared, not paired with
+  the new splat.
+- **Identity check failure gate (RT-0036).** `npm run check:identity` runs every
+  check before it decides the exit code. `CHECK_IDENTITY_SELF_TEST=1` injects a
+  deliberate failure and proves the command exits non-zero.
+
 - **Screenshots use Firefox (RT-0034).** `applications/gui/tools/capture-screenshot.ps1`
   now calls `capture-firefox.py`, which runs headless Firefox through Selenium
   with an isolated temporary profile. The earlier Edge/DevTools helper stopped

@@ -23,7 +23,16 @@ async function loadModule(name) {
 const identity = await loadModule('identity')
 const guard = await loadModule('displayGuard')
 const { splatKey, isKeyAtLeast, retryDelayMs, needsMaskFetch, settleMaskIdentity } = identity
-const { shouldClearDisplayedState, shouldApplyResponse, shouldApplyAuxiliary } = guard
+const {
+  auxIsCurrentOrNewer,
+  auxMatchesActive,
+  shouldApplyAuxiliary,
+  shouldApplyResponse,
+  shouldClearDisplayedState,
+  shouldDrainMask,
+  shouldDrainPoseDepth,
+  shouldDrainSplat,
+} = guard
 
 let failures = 0
 function check(name, condition) {
@@ -66,12 +75,6 @@ const freshSettled = settleMaskIdentity(splatKey('camera', 2, 43), splatKey('cam
 check('a fresh response displays its own identity', freshSettled.displayedKey === freshSettled.satisfiedKey)
 check('a missing response identity falls back to the request', settleMaskIdentity(active, null).displayedKey === active)
 
-if (failures > 0) {
-  console.error(`${failures} identity check(s) failed`)
-  process.exit(1)
-}
-console.log('all identity checks passed')
-
 // Delayed responses across a run clear (RT-0034). The epoch is 0 while a
 // request is in flight; the boundary clear must invalidate it even when no
 // displayed or pending key exists.
@@ -101,3 +104,43 @@ check('an active state applies motion and depth', shouldApplyAuxiliary(true) ===
 // An idle clear has nothing to invalidate.
 check('an idle clear does nothing', shouldClearDisplayedState(false, 0) === false)
 check('displayed state always clears', shouldClearDisplayedState(true, 0) === true)
+
+// A request queued behind an old in-flight response still drains (RT-0036).
+{
+  const oldEpoch = 11
+  const newEpoch = 12
+  const newRunKey = splatKey('camera', 1, 40)
+  // The old response is discarded, so the rendered mask key stays empty; the
+  // queued new-run request must still start from the drain path.
+  check('discarded splat response still drains a queued request', shouldDrainSplat(newRunKey, null) === true)
+  check('discarded mask response still drains a queued request', shouldDrainMask(newRunKey, null) === true)
+  check('discarded pose-depth response still drains a queued request', shouldDrainPoseDepth(newRunKey, null) === true)
+  check('the queued request is from the new run', shouldApplyResponse(newEpoch, newEpoch) === true)
+  check('the old response is from the old run', shouldApplyResponse(oldEpoch, newEpoch) === false)
+}
+
+// Motion and pose-depth must match the active diagnostics identity (RT-0036).
+{
+  const activeState = { source_id: 'camera', generation: 2, frame_id: 77 }
+  check('same-run motion applies', auxMatchesActive({ source_id: 'camera', generation: 2, splat_frame_id: 77 }, activeState) === true)
+  check('old-generation motion is rejected', auxMatchesActive({ source_id: 'camera', generation: 1, splat_frame_id: 77 }, activeState) === false)
+  check('old-frame motion is rejected', auxMatchesActive({ source_id: 'camera', generation: 2, splat_frame_id: 60 }, activeState) === false)
+  check('other-source motion is rejected', auxMatchesActive({ source_id: 'other', generation: 2, splat_frame_id: 77 }, activeState) === false)
+  check('same-run pose-depth applies', auxMatchesActive({ source_id: 'camera', generation: 2, splat_frame_id: 77 }, activeState) === true)
+  check('pose-depth without identity is rejected', auxIsCurrentOrNewer(null, activeState) === false)
+  check('newer pose-depth for the same run applies', auxIsCurrentOrNewer({ source_id: 'camera', generation: 2, splat_frame_id: 80 }, activeState) === true)
+  check('older pose-depth is rejected', auxIsCurrentOrNewer({ source_id: 'camera', generation: 2, splat_frame_id: 70 }, activeState) === false)
+  check('old-generation pose-depth is rejected', auxIsCurrentOrNewer({ source_id: 'camera', generation: 1, splat_frame_id: 77 }, activeState) === false)
+  check('auxiliary without an active state is rejected', auxMatchesActive({ source_id: 'camera', generation: 2, splat_frame_id: 77 }, null) === false)
+}
+
+if (process.env.CHECK_IDENTITY_SELF_TEST === '1') {
+  // Deliberate failure: proves the command exits non-zero when a check fails.
+  check('self-test: deliberate failure is detected', false)
+}
+
+if (failures > 0) {
+  console.error(`${failures} identity check(s) failed`)
+  process.exit(1)
+}
+console.log('all identity checks passed')
