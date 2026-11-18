@@ -108,6 +108,8 @@ export interface SplatHeader {
   opacity_encoding: string
   byte_length: number
   timings_ms?: Record<string, number>
+  /** Age from capture to server publish, milliseconds. Absent for recorded sources. */
+  capture_age_ms?: number | null
   pose_confidence?: number
   person_detected?: boolean
   mask?: SplatMask
@@ -159,6 +161,7 @@ export interface DiagnosticsSplat {
   frame_id: string | null
   count: number | null
   timings_ms: Record<string, number> | null
+  capture_age_ms?: number | null
   mask: SplatMask | null
   depth_source: string | null
   pose_confidence: number | null

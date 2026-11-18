@@ -241,6 +241,22 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   current generation, reset on a run change. A stale success or failure cannot
   change the current run's `refresh_count` or `refresh_failures`.
 
+## Phase 2 telemetry (2026-11-18)
+
+- **Latency is the stage sum.** `pose_depth`, `mask`, `construct`, and
+  `pose_preview` are measured, and `total` is their sum (`stage_total`), so the
+  logged latency equals all processing time. The refresh log line carries
+  `ms.total`, `ms.pose_preview`, `splats`, and `capture_age_ms`.
+- **Capture age** is reported only for a live camera, because that source uses
+  the same monotonic clock as the process. A recorded source reports `null`.
+- **Grafana-style summary.** `--summary-json` now includes `latency_ms`,
+  `latency_warm_ms` (excludes the model warm-up refresh), `capture_age_ms`, and
+  `splat_count` summaries, plus a `cascade` block with `selected`, `submitted`,
+  `started`, `replaced`, `published`, `failed`, and `reuse`.
+- **Viewer latency.** The splat footer shows `Display: N ms`, computed as
+  capture age at publish + server state age + browser parse and render time.
+  For a recorded source this is publish-to-display latency.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.

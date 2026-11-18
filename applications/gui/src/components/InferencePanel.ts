@@ -160,10 +160,14 @@ export class InferencePanel {
         : `pose+depth ${formatNumber(timings.pose_depth, 1)} ms  ·  mask ${formatNumber(
             timings.mask,
             1,
-          )} ms  ·  construct ${formatNumber(timings.construct, 1)} ms  ·  total ${formatNumber(
-            timings.total,
+          )} ms  ·  construct ${formatNumber(timings.construct, 1)} ms  ·  preview ${formatNumber(
+            timings.pose_preview ?? 0,
             1,
-          )} ms`,
+          )} ms  ·  total ${formatNumber(timings.total, 1)} ms${
+            splat?.capture_age_ms === null || splat?.capture_age_ms === undefined
+              ? ''
+              : `  ·  capture ${formatNumber(splat.capture_age_ms, 1)} ms`
+          }`,
     )
     this.set(
       'worker',

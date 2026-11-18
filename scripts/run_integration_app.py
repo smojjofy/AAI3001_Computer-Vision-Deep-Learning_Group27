@@ -41,6 +41,7 @@ from backend.pipeline_server import PipelineServer, PipelineState  # noqa: E402
 from live_pipeline.adapters import DepthThresholdConfig  # noqa: E402
 from live_pipeline.motion import build_motion_preview  # noqa: E402
 from live_pipeline.runstate import PacketRunTracker, RunCounters, RunGuard, drain_queue  # noqa: E402
+from live_pipeline.telemetry import summarize_counts, summarize_ms  # noqa: E402
 from live_pipeline.pipeline import RefreshError, RefreshPipeline  # noqa: E402
 from live_pipeline.scheduler import RefreshDispatcher, RefreshJob  # noqa: E402
 from live_pipeline.window import WindowSelector  # noqa: E402
@@ -121,6 +122,9 @@ def main() -> None:
     )
 
     counters: Counter[str] = Counter()
+    latency_samples: list[float] = []
+    capture_age_samples: list[float] = []
+    splat_samples: list[int] = []
     latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None}
     lock = threading.Lock()
 
@@ -189,6 +193,15 @@ def main() -> None:
                     "person_detected": header.get("person_detected"),
                 },
                 "counters": dict(counters),
+                "cascade": {
+                    "selected": counters["windows"],
+                    "submitted": dispatcher.submitted_total,
+                    "started": dispatcher.started_total,
+                    "replaced": dispatcher.replaced_total,
+                    "published": run_counters.refresh_count,
+                    "failed": run_counters.refresh_failures,
+                    "reuse": counters["reuse"],
+                },
                 "refresh_worker": dispatcher.snapshot(),
                 "stream_health": str(handler.health()),
                 "queue": {
@@ -245,12 +258,17 @@ def main() -> None:
                 latest["outcome_header"] = outcome.header
                 latest["last_error"] = None
             counters["refresh_published"] += 1
+            latency_samples.append(float(outcome.timings_ms["total"]))
+            if outcome.capture_age_ms is not None:
+                capture_age_samples.append(float(outcome.capture_age_ms))
+            splat_samples.append(int(outcome.splat_count))
             print(
                 json.dumps(
                     {
                         "refresh": outcome.frame_id,
                         "splats": outcome.splat_count,
                         "ms": {key: round(value, 1) for key, value in outcome.timings_ms.items()},
+                        "capture_age_ms": None if outcome.capture_age_ms is None else round(outcome.capture_age_ms, 1),
                         "mask_area": round(float(outcome.mask.area_fraction), 3),
                     }
                 ),
@@ -403,6 +421,21 @@ def main() -> None:
         "capture_fps": round(handler.metrics.capture_fps, 2),
         "queue_drops": handler.queue.dropped_total,
         "last_error": latest["last_error"],
+        "latency_ms": summarize_ms(latency_samples),
+        # The first refresh after model load includes warm-up and is not a
+        # steady-state latency sample.
+        "latency_warm_ms": summarize_ms(latency_samples[1:]),
+        "capture_age_ms": summarize_ms(capture_age_samples),
+        "splat_count": summarize_counts(splat_samples),
+        "cascade": {
+            "selected": counters["windows"],
+            "submitted": dispatcher.submitted_total,
+            "started": dispatcher.started_total,
+            "replaced": dispatcher.replaced_total,
+            "published": counters["refresh_published"],
+            "failed": counters["refresh_failed"],
+            "reuse": counters["reuse"],
+        },
     }
     print(json.dumps({"summary": summary}, indent=2), flush=True)
     if args.summary_json is not None:

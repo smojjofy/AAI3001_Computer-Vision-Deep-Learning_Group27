@@ -100,6 +100,7 @@ export class SplatOutputPanel {
   private splatLabel: HTMLElement
   private fpsLabel: HTMLElement
   private alphaLabel: HTMLElement
+  private latencyLabel: HTMLElement
 
   private renderer: WebGLRenderer | null = null
   private scene = new Scene()
@@ -188,6 +189,7 @@ export class SplatOutputPanel {
     this.splatLabel = this.element.querySelector<HTMLElement>('.splat-count')!
     this.fpsLabel = this.element.querySelector<HTMLElement>('.splat-fps')!
     this.alphaLabel = this.element.querySelector<HTMLElement>('.splat-alpha')!
+    this.latencyLabel = this.element.querySelector<HTMLElement>('.splat-latency')!
 
     this.resetButton.addEventListener('click', () => {
       this.fitView()
@@ -231,6 +233,15 @@ export class SplatOutputPanel {
   }
 
   /** Replace the rendered splat state with one decoded /api/splat frame. */
+  /** Show the measured capture-to-display latency for the installed state. */
+  setCaptureToDisplay(latencyMs: number | null): void {
+    if (latencyMs === null || !Number.isFinite(latencyMs)) {
+      this.latencyLabel.textContent = 'Display: --'
+      return
+    }
+    this.latencyLabel.textContent = `Display: ${Math.round(latencyMs)} ms`
+  }
+
   setSplatFrame(frame: SplatFrame): void {
     if (this.renderer === null || this.controls === null) {
       this.showError(new Error('gsplat renderer is not available'))
@@ -539,6 +550,7 @@ export class SplatOutputPanel {
     this.alphaLabel.textContent = 'Alpha: 1.00'
     this.frameLabel.textContent = 'Frame: --'
     this.splatLabel.textContent = 'Splats: --'
+    this.setCaptureToDisplay(null)
     this.showPlaceholder(message)
     this.updateStatus()
   }

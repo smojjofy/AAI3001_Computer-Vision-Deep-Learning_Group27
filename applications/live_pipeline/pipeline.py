@@ -10,10 +10,12 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from time import perf_counter
+from time import monotonic_ns, perf_counter
 from typing import Any
 
 import numpy as np
+
+from .telemetry import capture_age_ms as capture_age_ms_at, stage_total
 
 from .adapters import (
     DepthThresholdConfig,
@@ -63,6 +65,7 @@ class RefreshOutcome:
     mask: DepthThresholdMask
     depth_m: np.ndarray
     timings_ms: dict[str, float]
+    capture_age_ms: float | None = None
     pose_preview: dict[str, Any] | None = None
     pose_joints: list[dict[str, Any]] | None = None
     pose_confidence: float = 0.0
@@ -244,14 +247,24 @@ class RefreshPipeline:
             pose_confidence = float(np.mean(visibilities)) if visibilities else 0.0
         except Exception:
             pose_preview = None
+        t_preview = perf_counter()
 
+        # Latency is the sum of every processing stage, so the logged total is
+        # the stage sum and not an independent clock reading that can drift.
         timings = {
             "pose_depth": (t_depth - started) * 1000.0,
             "mask": (t_mask - t_depth) * 1000.0,
             "construct": (t_build - t_mask) * 1000.0,
-            "total": (perf_counter() - started) * 1000.0,
+            "pose_preview": (t_preview - t_build) * 1000.0,
         }
+        timings["total"] = stage_total(timings)
+        capture_age_ms = capture_age_ms_at(
+            packet.capture_timestamp_ns,
+            monotonic_ns(),
+            getattr(packet, "timestamp_origin", None),
+        )
         header["timings_ms"] = {key: round(value, 2) for key, value in timings.items()}
+        header["capture_age_ms"] = None if capture_age_ms is None else round(capture_age_ms, 2)
         header["image_width"] = int(packet.width)
         header["image_height"] = int(packet.height)
         header["intrinsics"] = [float(value) for value in intrinsics]
@@ -283,6 +296,7 @@ class RefreshPipeline:
             mask=mask_info,
             depth_m=depth_m,
             timings_ms=timings,
+            capture_age_ms=capture_age_ms,
             pose_preview=pose_preview,
             pose_joints=pose_joints,
             pose_confidence=float(pose_confidence),

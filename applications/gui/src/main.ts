@@ -359,9 +359,14 @@ async function refreshSplat(key: string): Promise<void> {
   splatFetchInFlight = true
   splatPendingKey = null
   const fetchEpoch = displayEpoch
+  let receivedAt = 0
   try {
     await runFetchWithEpoch({
-      fetch: fetchSplat,
+      fetch: async () => {
+        const result = await fetchSplat()
+        receivedAt = performance.now()
+        return result
+      },
       startEpoch: fetchEpoch,
       currentEpoch: () => displayEpoch,
       apply: (result) => {
@@ -376,6 +381,13 @@ async function refreshSplat(key: string): Promise<void> {
           splatRenderedGeneration = Number(header.generation ?? 0)
           splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
           splatOutputPanel.setSplatFrame(result.data)
+          // Capture to display is the capture age at publish, the publish to
+          // response age, and the browser parse and render cost. A recorded
+          // source has no capture age; then this is publish to display.
+          const renderMs = receivedAt > 0 ? performance.now() - receivedAt : 0
+          const captureAge = Number(header.capture_age_ms ?? 0)
+          const stateAge = Number(header.state_age_ms ?? 0)
+          splatOutputPanel.setCaptureToDisplay(captureAge + stateAge + renderMs)
           // Release the loss clock only when a state that is new for this run
           // has been installed.
           releasePersonLossIfNewState(header)
