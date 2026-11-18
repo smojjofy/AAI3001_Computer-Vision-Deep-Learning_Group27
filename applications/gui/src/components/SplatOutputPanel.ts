@@ -41,6 +41,8 @@ import {
 } from 'gsplat'
 
 import type { MotionPayload, PoseJoint, SplatFrame } from '../api/types'
+import { captureToDisplayMs, formatLatencyLabel } from '../api/latency'
+import type { LatencyPhases } from '../api/latency'
 
 /** gsplat camera/view limits in metres. */
 const NEAR_M = 0.05
@@ -116,6 +118,8 @@ export class SplatOutputPanel {
   private pendingDescriptor: SplatDescriptor | null = null
   private descriptorDirty = false
   private descriptorReadyAt = 0
+  /** Latency phases for the newest state; published after it is rendered. */
+  private pendingLatency: { phases: LatencyPhases; applied: boolean } | null = null
   private warpDirty = false
 
   private intrinsics: Intrinsics = { fx: 800, fy: 800 }
@@ -170,7 +174,7 @@ export class SplatOutputPanel {
         <span class="splat-footer-item splat-count">Splats: --</span>
         <span class="splat-footer-item splat-fps">Render FPS: --</span>
         <span class="splat-footer-item splat-alpha">Alpha: --</span>
-        <span class="splat-footer-item splat-latency">Display: --</span>
+        <span class="splat-footer-item splat-latency">Display (est): --</span>
       </div>
     `
 
@@ -234,13 +238,15 @@ export class SplatOutputPanel {
   }
 
   /** Replace the rendered splat state with one decoded /api/splat frame. */
-  /** Show the measured capture-to-display latency for the installed state. */
-  setCaptureToDisplay(latencyMs: number | null): void {
-    if (latencyMs === null || !Number.isFinite(latencyMs)) {
-      this.latencyLabel.textContent = 'Display: --'
-      return
+  /**
+   * Record the latency phases for a state. The footer value is written only
+   * after the renderer has applied that state, in renderFrame().
+   */
+  setCaptureToDisplay(phases: LatencyPhases | null): void {
+    this.pendingLatency = phases === null ? null : { phases, applied: false }
+    if (phases === null) {
+      this.latencyLabel.textContent = formatLatencyLabel(null)
     }
-    this.latencyLabel.textContent = `Display: ${Math.round(latencyMs)} ms`
   }
 
   setSplatFrame(frame: SplatFrame): void {
@@ -855,13 +861,22 @@ export class SplatOutputPanel {
     if (this.disposed || this.renderer === null || this.controls === null) {
       return
     }
+    const appliedBefore = !this.descriptorDirty && !this.warpDirty
     this.applyPendingDescriptor()
+    const stateJustApplied = !appliedBefore && !this.descriptorDirty && !this.warpDirty
     try {
       this.controls.update()
       this.renderer.render(this.scene, this.camera)
     } catch (error) {
       this.showError(error)
       return
+    }
+    if (stateJustApplied && this.pendingLatency !== null) {
+      // This render frame shows the state, so the estimate is complete.
+      this.latencyLabel.textContent = formatLatencyLabel(
+        captureToDisplayMs(this.pendingLatency.phases),
+      )
+      this.pendingLatency = null
     }
     this.frameCounter++
     this.updateFps()

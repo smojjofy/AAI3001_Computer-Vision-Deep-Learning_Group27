@@ -24,6 +24,7 @@ async function loadModule(name) {
 
 const guard = await loadModule('displayGuard')
 const skeleton = await loadModule('skeleton')
+const latency = await loadModule('latency')
 const runner = await loadModule('fetchRunner')
 const {
   depthDisplayDecision,
@@ -33,6 +34,7 @@ const {
 } = guard
 const { runFetchWithEpoch } = runner
 const { skeletonSegments, visibleJoints, MIN_VISIBILITY } = skeleton
+const { captureToDisplayMs, formatLatencyLabel, LATENCY_LABEL_PREFIX } = latency
 
 let failures = 0
 function check(name, condition) {
@@ -156,6 +158,18 @@ function delay(ms, value) {
   check('a full pose yields connected segments', skeletonSegments(
     Array.from({ length: 33 }, (_, index) => joint(index, 0.5, 0.5)),
   ).length > 20)
+}
+
+// 7. Capture-to-display estimate boundaries (RT-0043 item 1).
+{
+  check('all phases sum', captureToDisplayMs({ captureAgeMs: 40, stateAgeMs: 12, browserMs: 30 }) === 82)
+  check('a zero browser phase is allowed', captureToDisplayMs({ captureAgeMs: 40, stateAgeMs: 12, browserMs: 0 }) === 52)
+  check('a missing phase yields no value', captureToDisplayMs(null) === null)
+  check('a non-finite phase yields no value', captureToDisplayMs({ captureAgeMs: Number.NaN, stateAgeMs: 1, browserMs: 1 }) === null)
+  check('a negative phase yields no value', captureToDisplayMs({ captureAgeMs: -1, stateAgeMs: 1, browserMs: 1 }) === null)
+  check('the missing label hides the value', formatLatencyLabel(null) === `${LATENCY_LABEL_PREFIX}: --`)
+  check('the label states it is an estimate', formatLatencyLabel(82).includes('est'))
+  check('the label rounds to whole milliseconds', formatLatencyLabel(82.6) === `${LATENCY_LABEL_PREFIX}: 83 ms`)
 }
 
 if (failures > 0) {

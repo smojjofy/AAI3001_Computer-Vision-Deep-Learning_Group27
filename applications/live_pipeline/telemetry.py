@@ -3,6 +3,12 @@
 The refresh log reports one latency value per published refresh: the sum of every
 processing stage. These helpers keep that arithmetic and its summary in one
 testable place. They have no model or camera dependency.
+
+Percentile definition: every percentile in this module uses the nearest-rank
+method. For ``n`` sorted samples and percentile ``p`` in [0, 100], the rank is
+``ceil(p / 100 * n)``, clamped to ``[1, n]``. The result is the sample at that
+rank. For ``[1, 2, 3, 4]``: p50 is 2, p95 is 4, p0 is 1, p100 is 4. Latency
+summaries and count summaries use this one definition.
 """
 
 from __future__ import annotations
@@ -19,9 +25,12 @@ def percentile(values: Sequence[float], percentile_value: float) -> float:
         raise ValueError("percentile needs at least one value")
     if not 0.0 <= percentile_value <= 100.0:
         raise ValueError("percentile must be between 0 and 100")
-    ordered = sorted(values)
-    index = min(len(ordered) - 1, max(0, round(percentile_value / 100.0 * (len(ordered) - 1))))
-    return float(ordered[index])
+    ordered = sorted(float(value) for value in values)
+    if percentile_value == 0.0:
+        return ordered[0]
+    rank = math.ceil(percentile_value / 100.0 * len(ordered))
+    index = min(len(ordered), max(1, rank)) - 1
+    return ordered[index]
 
 
 def summarize_ms(values: Iterable[float]) -> dict[str, float | int] | None:
@@ -41,14 +50,13 @@ def summarize_ms(values: Iterable[float]) -> dict[str, float | int] | None:
 
 def summarize_counts(values: Iterable[int]) -> dict[str, int] | None:
     """Summarize integer counts such as splats per refresh."""
-    samples = [int(value) for value in values]
+    samples = sorted(int(value) for value in values)
     if not samples:
         return None
-    samples.sort()
     return {
         "count": len(samples),
         "mean": int(round(sum(samples) / len(samples))),
-        "p50": samples[len(samples) // 2],
+        "p50": int(percentile(samples, 50)),
         "min": samples[0],
         "max": samples[-1],
     }

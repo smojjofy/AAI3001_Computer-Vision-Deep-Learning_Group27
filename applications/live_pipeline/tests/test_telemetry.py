@@ -14,12 +14,22 @@ from applications.live_pipeline.telemetry import (
 from stream_handler.contracts import TimestampOrigin
 
 
-def test_percentile_boundaries_and_single_sample() -> None:
+def test_percentile_nearest_rank_boundaries_and_single_sample() -> None:
     assert percentile([42.0], 0) == 42.0
+    assert percentile([42.0], 50) == 42.0
     assert percentile([42.0], 95) == 42.0
-    assert percentile([1.0, 2.0, 3.0, 4.0], 50) == 3.0
+    assert percentile([42.0], 100) == 42.0
+    # Nearest rank: the rank is ceil(p/100 * n), clamped to [1, n].
+    assert percentile([1.0, 2.0, 3.0, 4.0], 0) == 1.0
+    assert percentile([1.0, 2.0, 3.0, 4.0], 25) == 1.0
+    assert percentile([1.0, 2.0, 3.0, 4.0], 50) == 2.0
+    assert percentile([1.0, 2.0, 3.0, 4.0], 75) == 3.0
+    assert percentile([1.0, 2.0, 3.0, 4.0], 95) == 4.0
     assert percentile([1.0, 2.0, 3.0, 4.0], 100) == 4.0
-    assert percentile([4.0, 3.0, 2.0, 1.0], 0) == 1.0
+    # Order does not matter.
+    assert percentile([4.0, 3.0, 2.0, 1.0], 50) == 2.0
+    # An odd count with a single middle value.
+    assert percentile([1.0, 2.0, 3.0], 50) == 2.0
     with pytest.raises(ValueError):
         percentile([], 50)
     with pytest.raises(ValueError):
@@ -36,6 +46,19 @@ def test_summarize_ms_skips_missing_and_non_finite() -> None:
     assert summary["max"] == 200.0
 
 
+def test_summarize_ms_even_sample_count_uses_nearest_rank() -> None:
+    # RT-0043 item 4: an even count must not pick the upper middle sample.
+    summary = summarize_ms([1.0, 2.0, 3.0, 4.0])
+    assert summary is not None
+    assert summary["p50"] == 2.0
+    assert summary["p95"] == 4.0
+    # Ten samples: p50 is the fifth value, p95 the tenth.
+    ten = summarize_ms([float(value) for value in range(1, 11)])
+    assert ten is not None
+    assert ten["p50"] == 5.0
+    assert ten["p95"] == 10.0
+
+
 def test_summarize_counts_is_integer_only() -> None:
     assert summarize_counts([]) is None
     summary = summarize_counts([27000, 28000, 30000])
@@ -44,6 +67,10 @@ def test_summarize_counts_is_integer_only() -> None:
     assert summary["p50"] == 28000
     assert summary["min"] == 27000
     assert summary["max"] == 30000
+    # The same nearest-rank rule applies to an even count.
+    even = summarize_counts([4, 1, 3, 2])
+    assert even is not None
+    assert even["p50"] == 2
 
 
 def test_capture_age_uses_only_the_decoded_monotonic_clock() -> None:

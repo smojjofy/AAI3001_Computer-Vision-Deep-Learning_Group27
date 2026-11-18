@@ -282,6 +282,26 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   `test_construction_frame_replaces_nan_and_keeps_validity`; invalid depth is
   replaced with zero validity, never a non-finite value.
 
+## Telemetry corrections (RT-0043)
+
+- **Display latency is an estimate.** The footer shows `Display (est): N ms`,
+  written only after the renderer has applied that state, so the value covers
+  every browser phase from the response arriving to the completed render.
+  Phases: capture age at publish (shared monotonic clock), server state age, and
+  the browser phase. The browser clock is separate from the capture clock, so
+  the value is labelled an estimate. `src/api/latency.ts` holds the rule.
+- **Live cascade is run-scoped.** Every diagnostics `cascade` field uses its
+  offset at the start of the current capture run (`scope: "run"`,
+  `run_generation`), so all fields describe the same run. The final summary
+  keeps process-lifetime totals.
+- **Capture age reaches diagnostics.** `splat.capture_age_ms` is copied into the
+  diagnostics payload, so the Inference panel can show it for a live camera and
+  show nothing for a recorded source.
+- **One percentile definition.** `telemetry.percentile` is nearest-rank:
+  rank `ceil(p/100 * n)` clamped to `[1, n]`. For `[1, 2, 3, 4]` the p50 is 2.
+  Latency and count summaries both use it, and an even sample count is covered
+  by tests.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.

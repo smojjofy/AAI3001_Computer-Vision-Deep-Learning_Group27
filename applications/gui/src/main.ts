@@ -381,13 +381,16 @@ async function refreshSplat(key: string): Promise<void> {
           splatRenderedGeneration = Number(header.generation ?? 0)
           splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
           splatOutputPanel.setSplatFrame(result.data)
-          // Capture to display is the capture age at publish, the publish to
-          // response age, and the browser parse and render cost. A recorded
-          // source has no capture age; then this is publish to display.
-          const renderMs = receivedAt > 0 ? performance.now() - receivedAt : 0
-          const captureAge = Number(header.capture_age_ms ?? 0)
-          const stateAge = Number(header.state_age_ms ?? 0)
-          splatOutputPanel.setCaptureToDisplay(captureAge + stateAge + renderMs)
+          // Capture to display is an estimate: capture age at publish (shared
+          // monotonic clock), publish to response age, and every browser phase
+          // from the response arriving to the renderer applying this state. The
+          // panel writes the value only after the state is rendered.
+          const browserMs = receivedAt > 0 ? performance.now() - receivedAt : Number.NaN
+          splatOutputPanel.setCaptureToDisplay({
+            captureAgeMs: Number(header.capture_age_ms ?? 0),
+            stateAgeMs: Number(header.state_age_ms ?? 0),
+            browserMs,
+          })
           // Release the loss clock only when a state that is new for this run
           // has been installed.
           releasePersonLossIfNewState(header)

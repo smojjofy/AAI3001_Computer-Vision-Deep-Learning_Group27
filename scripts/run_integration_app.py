@@ -137,6 +137,19 @@ def main() -> None:
     )
 
     counters: Counter[str] = Counter()
+    # Cascade offsets at the start of the current capture run. The live cascade
+    # must describe one run, while the dispatcher and window counters are
+    # process lifetime totals.
+    run_cascade_base: dict[str, int] = {
+        "windows": 0,
+        "submitted": 0,
+        "started": 0,
+        "replaced": 0,
+        "reuse": 0,
+    }
+    # Placeholder until the dispatcher is constructed below; the first run
+    # starts at zero for every field, so the base is correct as written.
+    dispatcher: object | None = None
     latency_samples: list[float] = []
     capture_age_samples: list[float] = []
     splat_samples: list[int] = []
@@ -148,6 +161,16 @@ def main() -> None:
         nonlocal window, window_start_capture, window_started_wall
         generation = run_guard.advance()
         run_counters.start_run(generation)
+        if dispatcher is not None:
+            run_cascade_base.update(
+                {
+                    "windows": int(counters["windows"]),
+                    "submitted": int(dispatcher.submitted_total),
+                    "started": int(dispatcher.started_total),
+                    "replaced": int(dispatcher.replaced_total),
+                    "reuse": int(counters["reuse"]),
+                }
+            )
         packet_tracker.reset()
         selector.set_generation(generation)
         pipeline.generation = generation
@@ -202,6 +225,7 @@ def main() -> None:
                     "frame_id": header.get("frame_id"),
                     "count": header.get("count"),
                     "timings_ms": header.get("timings_ms"),
+                    "capture_age_ms": header.get("capture_age_ms"),
                     "mask": header.get("mask"),
                     "depth_source": header.get("depth_source"),
                     "pose_confidence": header.get("pose_confidence"),
@@ -209,13 +233,17 @@ def main() -> None:
                 },
                 "counters": dict(counters),
                 "cascade": {
-                    "selected": counters["windows"],
-                    "submitted": dispatcher.submitted_total,
-                    "started": dispatcher.started_total,
-                    "replaced": dispatcher.replaced_total,
+                    # Current capture run only: every field uses the run-start
+                    # offset, so all fields describe the same run.
+                    "scope": "run",
+                    "run_generation": run_guard.generation,
+                    "selected": int(counters["windows"]) - run_cascade_base["windows"],
+                    "submitted": int(dispatcher.submitted_total) - run_cascade_base["submitted"],
+                    "started": int(dispatcher.started_total) - run_cascade_base["started"],
+                    "replaced": int(dispatcher.replaced_total) - run_cascade_base["replaced"],
                     "published": run_counters.refresh_count,
                     "failed": run_counters.refresh_failures,
-                    "reuse": counters["reuse"],
+                    "reuse": int(counters["reuse"]) - run_cascade_base["reuse"],
                 },
                 "refresh_worker": dispatcher.snapshot(),
                 "stream_health": str(handler.health()),
