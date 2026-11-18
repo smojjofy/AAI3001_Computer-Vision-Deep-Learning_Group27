@@ -179,6 +179,26 @@ export interface RefreshWorkerSnapshot {
   last_error?: string | null
 }
 
+export interface CalibrationStatus {
+  active: boolean
+  status: string
+  frames: number
+  seconds: number
+  baseline: {
+    source_id: string
+    generation: number
+    width: number
+    height: number
+    frames_used: number
+    valid_fraction: number
+    median_depth_m: number
+    p05_depth_m: number
+    p95_depth_m: number
+  } | null
+  last_error: string | null
+  events: number
+}
+
 export interface DiagnosticsPayload {
   schema_version: string
   action: string | null
@@ -197,6 +217,7 @@ export interface DiagnosticsPayload {
   person_lost?: boolean
   active_identity?: ActiveStateIdentity | null
   motion_active?: boolean
+  calibration?: CalibrationStatus | null
   splat: DiagnosticsSplat | null
   counters: Record<string, number>
   refresh_worker: RefreshWorkerSnapshot | null

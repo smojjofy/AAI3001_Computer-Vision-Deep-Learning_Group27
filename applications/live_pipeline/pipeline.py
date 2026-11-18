@@ -15,7 +15,9 @@ from typing import Any
 
 import numpy as np
 
+from .background_calibration import BackgroundBaseline
 from .camera_config import CameraConfig
+from .mask_selection import select_person_mask
 from .telemetry import capture_age_ms as capture_age_ms_at, stage_total
 
 from .adapters import (
@@ -101,6 +103,7 @@ class RefreshPipeline:
     sample_stride: int = 2
     horizontal_fov_deg: float = 60.0
     camera_config: CameraConfig | None = None
+    background_baseline: BackgroundBaseline | None = None
     yolo_model: str | None = None
     yolo_imgsz: int = 640
     device: str = "auto"
@@ -164,6 +167,42 @@ class RefreshPipeline:
         assert intrinsics is not None
         return intrinsics
 
+    def set_background_baseline(self, baseline: BackgroundBaseline | None) -> None:
+        """Use an empty-scene background baseline for later masks.
+
+        The baseline is only applied when its source, generation, and image size
+        match the refresh frame, so a stale scene cannot leak into a new run.
+        """
+        self.background_baseline = baseline
+
+    def capture_background_depth(self, packet, generation: int | None = None) -> tuple[np.ndarray, bool]:
+        """Run pose and depth for one calibration frame.
+
+        Returns ``(depth_m, person_detected)``. Calibration runs while the scene
+        is empty, so the pose requirement does not apply, but a detected person
+        is reported so the caller can refuse to learn a person as background.
+        This does not build a mask or a splat state.
+        """
+        intrinsics = self._ensure_intrinsics(packet)
+        pipeline = self._ensure_pipeline()
+        depth_input = None
+        depth_units = None
+        if packet.depth is not None:
+            depth_input = depth_to_metres(packet.depth, packet.depth_units)
+            depth_units = "metres"
+        result = pipeline.process_frame(
+            packet.rgb,
+            packet.frame_id,
+            packet.source_id,
+            packet.capture_timestamp_ns,
+            depth=depth_input,
+        )
+        detected = bool(getattr(result, "detected", False))
+        if depth_input is not None:
+            # A source that already supplies depth returns that depth.
+            return np.asarray(depth_input, dtype=np.float32), detected
+        return np.asarray(result.depth.depth, dtype=np.float32), detected
+
     def process(self, packet, generation: int | None = None) -> RefreshOutcome:
         """Run pose, depth, mask, and construction for one selected frame.
 
@@ -203,7 +242,14 @@ class RefreshPipeline:
             raise RefreshError(self.last_error, person_missing=True)
 
         depth_m = np.asarray(result.depth.depth, dtype=np.float32)
-        mask_info = depth_threshold_mask(depth_m, self.mask_config)
+        mask_selection = select_person_mask(
+            depth_m,
+            baseline=self.background_baseline,
+            source_id=packet.source_id,
+            generation=job_generation,
+            config=self.mask_config,
+        )
+        mask_info = mask_selection.info
         if not mask_info.detected:
             self.failure_count += 1
             reason = "mask area {:.3f} outside [{:.3f}, {:.3f}]".format(
@@ -291,6 +337,8 @@ class RefreshPipeline:
         }
         header["depth_source"] = result.depth_source
         header["depth_units_metres"] = True
+        header["mask"]["source"] = mask_selection.source
+        header["mask"]["fallback_reason"] = mask_selection.fallback_reason
         pose_joints = None
         if pose_preview is not None:
             candidate_joints = pose_preview.get("joints")

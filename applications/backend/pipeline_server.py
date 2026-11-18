@@ -94,6 +94,16 @@ class PipelineState:
     pose_joints: list[dict[str, Any]] | None = None
     person_lost_mono_ns: int | None = None
     last_invalid_person_mono_ns: int | None = None
+    calibration: dict[str, Any] = field(default_factory=lambda: {
+        "active": False,
+        "status": "uncalibrated",
+        "requested_at_s": None,
+        "seconds": 0.0,
+        "frames": 0,
+        "baseline": None,
+        "last_error": None,
+        "events": 0,
+    })
 
     def publish_snapshot(
         self,
@@ -245,6 +255,39 @@ class PipelineState:
         with self._lock:
             return self.pose_depth
 
+    def request_calibration(self, seconds: float = 2.0) -> dict[str, Any]:
+        """Ask the refresh worker to capture an empty-scene background baseline.
+
+        The capture is bounded by time and frame count in the worker. The request
+        is refused while another capture is active.
+        """
+        with self._lock:
+            if self.calibration.get("active"):
+                return {"status": "busy", "calibration": dict(self.calibration)}
+            self.calibration = {
+                "active": True,
+                "status": "capturing",
+                "requested_at_s": time.monotonic(),
+                "seconds": max(0.5, float(seconds)),
+                "frames": 0,
+                "baseline": None,
+                "last_error": None,
+                "events": int(self.calibration.get("events", 0)) + 1,
+            }
+            return {"status": "started", "calibration": dict(self.calibration)}
+
+    def get_calibration(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self.calibration)
+
+    def update_calibration(self, **fields: Any) -> None:
+        with self._lock:
+            self.calibration = {**self.calibration, **fields}
+
+    def record_calibration_frame(self, frames: int) -> None:
+        with self._lock:
+            self.calibration = {**self.calibration, "frames": int(frames)}
+
     def get_diagnostics(self) -> dict[str, Any]:
         with self._lock:
             payload = dict(self.diagnostics)
@@ -260,6 +303,7 @@ class PipelineState:
             payload["motion_active"] = self.motion is not None
             payload["motion_published"] = self.motion_published_total
             payload["motion_rejected"] = self.motion_rejected_total
+            payload["calibration"] = dict(self.calibration)
             return payload
 
 
@@ -300,6 +344,22 @@ class PipelineRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "ok", "stream_health": str(self.server.stream_handler.health())})
         else:
             self._serve_static(path)
+
+    def do_POST(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
+        path = urlsplit(self.path).path
+        if path == "/api/calibrate":
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length > 0 else b"{}"
+            seconds = 2.0
+            try:
+                payload = json.loads(body or b"{}")
+                if isinstance(payload, dict) and "seconds" in payload:
+                    seconds = float(payload["seconds"])
+            except (ValueError, TypeError):
+                seconds = 2.0
+            self._send_json(self.server.state.request_calibration(seconds))
+            return
+        self._send_json({"status": "error", "error": "unknown endpoint"}, status=404)
 
     def _send_preview(self) -> None:
         packet = self.server.stream_handler.latest_packet
@@ -385,9 +445,9 @@ class PipelineRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Stream-Health", str(self.server.stream_handler.health()))
         self.end_headers()
 
-    def _send_json(self, payload: dict[str, Any]) -> None:
+    def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(payload, separators=(",", ":"), default=_json_default).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))

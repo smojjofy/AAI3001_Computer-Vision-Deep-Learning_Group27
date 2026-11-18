@@ -42,6 +42,10 @@ from live_pipeline.adapters import DepthThresholdConfig  # noqa: E402
 from live_pipeline.motion import build_motion_preview  # noqa: E402
 from live_pipeline.runstate import PacketRunTracker, RunCounters, RunGuard, drain_queue  # noqa: E402
 from live_pipeline.telemetry import summarize_counts, summarize_ms  # noqa: E402
+from live_pipeline.background_calibration import (  # noqa: E402
+    BackgroundCalibrator,
+    CalibrationError,
+)
 from live_pipeline.pipeline import RefreshError, RefreshPipeline  # noqa: E402
 from live_pipeline.scheduler import RefreshDispatcher, RefreshJob  # noqa: E402
 from live_pipeline.window import WindowSelector  # noqa: E402
@@ -182,6 +186,7 @@ def main() -> None:
         # loss latch, and motion, and clear the diagnostics that describe them,
         # so a viewer cannot show old-run data beside the new run generation.
         state.clear_active()
+        pipeline.set_background_baseline(None)
         with lock:
             latest["outcome_header"] = None
             latest["last_error"] = None
@@ -259,10 +264,62 @@ def main() -> None:
             }
         )
 
+    calibration = BackgroundCalibrator()
+
+    def run_calibration_step(job, job_generation: int, request: dict) -> None:
+        """Capture one calibration frame; build and freeze the baseline when due."""
+        requested_at = request.get("requested_at_s") or time.monotonic()
+        seconds = float(request.get("seconds") or 2.0)
+        elapsed = time.monotonic() - float(requested_at)
+        try:
+            depth_m, person_detected = pipeline.capture_background_depth(job.packet, generation=job_generation)
+            if person_detected:
+                # Never learn a person as background. Stop and report instead of
+                # collecting a bad baseline.
+                calibration.reset()
+                state.update_calibration(
+                    active=False,
+                    status="failed",
+                    frames=0,
+                    last_error="person detected during calibration; clear the scene and retry",
+                )
+                publish_diagnostics()
+                return
+            calibration.add(depth_m)
+            state.record_calibration_frame(calibration.count)
+            if elapsed < seconds and calibration.count < 20:
+                publish_diagnostics()
+                return
+            if calibration.count < 3:
+                raise CalibrationError("too few calibration frames were captured; retry")
+            baseline = calibration.build(
+                source_id=job.packet.source_id,
+                generation=job_generation,
+            )
+        except (CalibrationError, RuntimeError) as error:
+            calibration.reset()
+            state.update_calibration(active=False, status="failed", last_error=str(error))
+            publish_diagnostics()
+            return
+        pipeline.set_background_baseline(baseline)
+        calibration.reset()
+        state.update_calibration(
+            active=False,
+            status="calibrated",
+            frames=baseline.frames_used,
+            baseline=baseline.stats(),
+            last_error=None,
+        )
+        publish_diagnostics()
+
     def refresh_worker(job) -> None:
         job_generation = int(getattr(job, "generation", run_guard.generation))
         if job_generation != run_guard.generation:
             counters["refresh_discarded_stale"] += 1
+            return
+        calibration = state.get_calibration()
+        if calibration.get("active"):
+            run_calibration_step(job, job_generation, calibration)
             return
         try:
             outcome = pipeline.process(job.packet, generation=job_generation)

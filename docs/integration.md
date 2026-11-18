@@ -336,13 +336,46 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
 - **Label waits for drawn data.** The panel keeps the state pending presentation
   until its own splat data is attached (`SplatData.detached` false), the
   descriptor is applied (no dirty flags), the data length matches the new state,
-  and any new-object readiness wait has passed. Only then does it publish the
-  label, and it records `data-latency-frame` and `data-latency-count` on the
-  panel for the state whose data was actually ready and drawn.
+  and the sort worker has returned one index per active splat. Only then does
+  it publish the label. It records `data-latency-frame`,
+  `data-latency-count`, and `data-latency-sorted-count` for that state.
 - **Browser check proves identity.** `check-latency-browser.py` now reads those
   data attributes and fails when a label is published without a rendered splat
   identity. The panel debug identity can lag the footer's newest frame, which is
   expected: the footer follows the header, the label follows the rendered data.
+
+The viewer also waits for `gsplat` to return sorted indices for the active splat
+before it publishes first-pack latency. This replaces the fixed 400 ms readiness
+wait. The check uses the active object, its vertex count, and the sorted-index
+count; a slow first pack keeps the label pending.
+
+## Phase A empty-scene background calibration (RT-0053)
+
+- **Manual capture.** `POST /api/calibrate` with an optional `seconds` body asks
+  the refresh worker to capture empty-scene depth frames for that long, then
+  builds one median background baseline and freezes it. The page has a
+  **Calibrate background** button and the Inference panel shows
+  `Background capturing N frames`, `calibrated · bg X m`, or the failure reason.
+- **Freeze by construction.** The calibrator only collects during an explicit
+  capture. It never learns while running, so a person cannot be absorbed into the
+  baseline. A calibration frame that contains a detected person aborts the
+  capture with `person detected during calibration; clear the scene and retry`.
+- **Mask selection.** With a usable baseline (matching image size, source id, and
+  capture generation) a person pixel is at least 0.30 m nearer than the
+  background at that pixel, within a 1.5 m span limit and the existing area
+  guard. If the comparison fails, the depth-threshold band runs as a fallback and
+  the reason is recorded. A size, source, or generation mismatch rejects the
+  baseline. Without a baseline the depth-threshold band runs exactly as before.
+- **Identity.** `advance_generation` clears the baseline, so a new source or
+  capture run cannot reuse the previous scene.
+- **Diagnostics.** `/api/diagnostics` reports `calibration`: active, status,
+  frames, baseline statistics (median, p05, p95, valid fraction), last error, and
+  event count.
+- **Tests.** 16 calibration and 8 mask-selection boundary tests cover empty
+  capture, shape and size changes, low valid depth, implausible depth spread,
+  person nearer and farther than the background, pixels without a baseline, the
+  span limit, both area-guard sides, fallback reasons, and every identity
+  mismatch.
 
 ## Code map
 

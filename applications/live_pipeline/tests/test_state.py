@@ -249,3 +249,37 @@ def test_clear_active_clears_stored_diagnostics() -> None:
     assert "last_error" not in diagnostics
     assert diagnostics["active_identity"] is None
     assert diagnostics["person_lost"] is False
+
+
+def test_calibration_request_is_bounded_and_refuses_a_second_capture() -> None:
+    state = PipelineState()
+    started = state.request_calibration(2.0)
+    assert started["status"] == "started"
+    assert started["calibration"]["active"] is True
+    assert started["calibration"]["status"] == "capturing"
+    # A shorter request is clamped to a usable minimum.
+    busy = state.request_calibration(0.1)
+    assert busy["status"] == "busy"
+    assert state.get_calibration()["seconds"] == 2.0
+    state.update_calibration(seconds=0.5)
+    assert state.get_calibration()["seconds"] == 0.5
+
+
+def test_calibration_status_reaches_diagnostics() -> None:
+    state = PipelineState()
+    assert state.get_diagnostics()["calibration"]["status"] == "uncalibrated"
+    state.request_calibration(2.0)
+    assert state.get_diagnostics()["calibration"]["active"] is True
+    state.record_calibration_frame(4)
+    assert state.get_diagnostics()["calibration"]["frames"] == 4
+    state.update_calibration(
+        active=False,
+        status="calibrated",
+        frames=4,
+        baseline={"median_depth_m": 4.2},
+        last_error=None,
+    )
+    calibration = state.get_diagnostics()["calibration"]
+    assert calibration["active"] is False
+    assert calibration["status"] == "calibrated"
+    assert calibration["baseline"]["median_depth_m"] == 4.2

@@ -8,6 +8,7 @@ import {
   fetchPoseDepth,
   fetchPreview,
   fetchSplat,
+  requestCalibration,
 } from './api/liveApi'
 
 import {
@@ -86,6 +87,19 @@ viewerGrid.appendChild(inferencePanel.getElement())
 
 const splatOutputPanel = new SplatOutputPanel()
 viewerGrid.appendChild(splatOutputPanel.getElement())
+splatOutputPanel.onCalibrate(() => {
+  void startCalibration()
+})
+
+async function startCalibration(): Promise<void> {
+  splatOutputPanel.setCalibrating(true)
+  const result = await requestCalibration(2.0)
+  if (result.kind !== 'ok') {
+    const detail = result.kind === 'error' ? result.error : 'no response'
+    console.warn(`Calibration request failed: ${detail}`)
+    splatOutputPanel.setCalibrating(false)
+  }
+}
 
 type PreviewState = 'unknown' | 'live' | 'waiting' | 'disconnected'
 
@@ -651,6 +665,7 @@ async function pollState(): Promise<void> {
     const diagnostics = diagnosticsResult.data
     pipelineHealth = diagnostics.stream_health
     inferencePanel.update(diagnostics)
+    splatOutputPanel.setCalibrating(Boolean(diagnostics.calibration?.active))
 
     const splatFrameId = diagnostics.splat?.frame_id ?? null
     activeIdentity = diagnostics.active_identity ?? null

@@ -26,6 +26,7 @@ const SECTIONS: SectionSpec[] = [
       { key: 'reason', label: 'Reason' },
       { key: 'flow', label: 'Flow / threshold' },
       { key: 'cache', label: 'Cache age' },
+  { key: 'calibration', label: 'Background' },
       { key: 'frames', label: 'Selected / active' },
       { key: 'candidates', label: 'Candidates' },
     ],
@@ -148,6 +149,22 @@ export class InferencePanel {
       }`,
     )
     this.set('candidates', diagnostics.candidates?.toString() ?? '--')
+
+    const calibration = diagnostics.calibration ?? null
+    if (calibration === null) {
+      this.set('calibration', '--')
+    } else if (calibration.active) {
+      this.set('calibration', `capturing ${calibration.frames} frames`)
+    } else if (calibration.status === 'calibrated' && calibration.baseline) {
+      this.set(
+        'calibration',
+        `calibrated  ·  bg ${calibration.baseline.median_depth_m.toFixed(2)} m  ·  ${calibration.baseline.frames_used} frames`,
+      )
+    } else if (calibration.status === 'failed') {
+      this.set('calibration', `failed: ${calibration.last_error ?? 'unknown'}`)
+    } else {
+      this.set('calibration', 'uncalibrated (depth band)')
+    }
 
     this.set(
       'refresh',

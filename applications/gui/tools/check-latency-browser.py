@@ -35,18 +35,36 @@ PLACEHOLDER = "Display (est): --"
 
 
 def read_state(driver) -> dict[str, str]:
-    frame = driver.find_element(By.CSS_SELECTOR, ".splat-frame").text
-    count = driver.find_element(By.CSS_SELECTOR, ".splat-count").text
-    latency = driver.find_element(By.CSS_SELECTOR, ".splat-latency").text
-    panel = driver.find_element(By.CSS_SELECTOR, ".splat-panel")
+    # Read every value in one browser call. Separate get_attribute/text calls
+    # can straddle a render and mix two publications, which is a harness race,
+    # not an application defect.
+    values = driver.execute_script(
+        """
+        const panel = document.querySelector('.splat-panel');
+        const pick = (selector) => {
+          const node = document.querySelector(selector);
+          return node ? node.textContent.trim() : '';
+        };
+        return [
+          pick('.splat-frame'),
+          pick('.splat-count'),
+          pick('.splat-latency'),
+          panel ? (panel.dataset.latencyFrame || '') : '',
+          panel ? (panel.dataset.latencyCount || '') : '',
+          panel ? (panel.dataset.latencySortedCount || '') : '',
+        ];
+        """
+    )
+    frame, count, latency, rendered_frame, rendered_count, sorted_count = values
     return {
         "frame": frame,
         "count": count,
         "latency": latency,
         # Identity of the splat data that was ready and drawn when the label
         # was published. Text alone does not prove the matching data was drawn.
-        "rendered_frame": panel.get_attribute("data-latency-frame") or "",
-        "rendered_count": panel.get_attribute("data-latency-count") or "",
+        "rendered_frame": rendered_frame,
+        "rendered_count": rendered_count,
+        "sorted_count": sorted_count,
     }
 
 
@@ -82,6 +100,8 @@ def main() -> int:
             failures.append("first state label does not state that it is an estimate")
         if not first["rendered_frame"] or not first["rendered_count"]:
             failures.append("first label has no rendered splat identity")
+        if first["sorted_count"] != first["rendered_count"]:
+            failures.append("first label has no complete sorted splat data")
 
         # 2 and 3. Collect later states and classify by splat count.
         # The first state is still being replaced while the panel starts, so the
@@ -101,6 +121,8 @@ def main() -> int:
             if state["frame"] != first_frame and state["latency"] != baseline["latency"]:
                 if not state["rendered_frame"] or not state["rendered_count"]:
                     failures.append("label published without a rendered splat identity")
+                if state["sorted_count"] != state["rendered_count"]:
+                    failures.append("label published before the active splats were sorted")
                 rendered_identities.add((state["rendered_frame"], state["rendered_count"]))
                 if state["count"] == first_count:
                     same_count_updated = True

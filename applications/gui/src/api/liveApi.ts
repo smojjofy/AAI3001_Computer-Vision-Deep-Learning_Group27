@@ -78,6 +78,23 @@ export function fetchMotion(): Promise<ApiResult<MotionPayload>> {
   return requestJson<MotionPayload>('/api/motion')
 }
 
+export async function requestCalibration(seconds = 2.0): Promise<ApiResult<{ status: string }>> {
+  try {
+    const response = await fetch('/api/calibrate', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seconds }),
+    })
+    if (!response.ok) {
+      return { kind: 'error', error: `HTTP ${response.status}` }
+    }
+    return { kind: 'ok', data: (await response.json()) as { status: string } }
+  } catch (error) {
+    return { kind: 'error', error: describeError(error) }
+  }
+}
+
 export async function fetchMask(): Promise<ApiResult<MaskFrame>> {
   try {
     const response = await fetch('/api/mask', {

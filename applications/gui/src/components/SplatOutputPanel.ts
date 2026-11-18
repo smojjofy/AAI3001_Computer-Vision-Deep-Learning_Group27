@@ -103,6 +103,7 @@ export class SplatOutputPanel {
   private fpsLabel: HTMLElement
   private alphaLabel: HTMLElement
   private latencyLabel: HTMLElement
+  private calibrateButton: HTMLButtonElement
 
   private renderer: WebGLRenderer | null = null
   private scene = new Scene()
@@ -117,7 +118,8 @@ export class SplatOutputPanel {
   private activeMotion: MotionPayload | null = null
   private pendingDescriptor: SplatDescriptor | null = null
   private descriptorDirty = false
-  private descriptorReadyAt = 0
+  /** Prevent writes to a new SplatData until its first pack is ready to draw. */
+  private newSplatPackPending = false
   /** Latency phases for the newest state; published after it is rendered. */
   private pendingLatency: LatencyPhases | null = null
   /** True while a new splat state still needs its first completed render. */
@@ -153,6 +155,7 @@ export class SplatOutputPanel {
     this.element.innerHTML = `
       <div class="panel-header">
         <h2>Splat Constructor Output</h2>
+        <button class="calibrate-button" type="button">Calibrate background</button>
       </div>
 
       <div class="viewer-content splat-content">
@@ -197,6 +200,7 @@ export class SplatOutputPanel {
     this.fpsLabel = this.element.querySelector<HTMLElement>('.splat-fps')!
     this.alphaLabel = this.element.querySelector<HTMLElement>('.splat-alpha')!
     this.latencyLabel = this.element.querySelector<HTMLElement>('.splat-latency')!
+    this.calibrateButton = this.element.querySelector<HTMLButtonElement>('.calibrate-button')!
 
     this.resetButton.addEventListener('click', () => {
       this.fitView()
@@ -240,6 +244,19 @@ export class SplatOutputPanel {
   }
 
   /** Replace the rendered splat state with one decoded /api/splat frame. */
+  /** Run the operator callback when the background calibration button is used. */
+  onCalibrate(callback: () => void): void {
+    this.calibrateButton.addEventListener('click', () => {
+      this.calibrateButton.disabled = true
+      callback()
+    })
+  }
+
+  setCalibrating(active: boolean): void {
+    this.calibrateButton.disabled = active
+    this.calibrateButton.textContent = active ? 'Calibrating...' : 'Calibrate background'
+  }
+
   /**
    * Record the latency phases for a state. The footer value is written only
    * after the renderer has applied that state, in renderFrame().
@@ -359,7 +376,6 @@ export class SplatOutputPanel {
       // avoids a scene rebuild on every refresh and the gsplat render data
       // rebuild that would start an asynchronous initial pack.
       this.descriptorDirty = true
-      this.descriptorReadyAt = 0
     } else {
       // Count changed (or the first frame): replace the splat object. Pass
       // copies because gsplat detaches the arrays it owns on the first pack.
@@ -377,10 +393,9 @@ export class SplatOutputPanel {
       this.scene.addObject(splat)
       this.activeSplat = splat
       this.descriptorDirty = false
-      // The new render data packs asynchronously while its WebAssembly module
-      // loads. Wait before raising a change event, otherwise the deferred
-      // initial pack reads buffers that the data worker already detached.
-      this.descriptorReadyAt = performance.now() + 400
+      // The first pack can wait for the WebAssembly module. Wait for the
+      // renderer's sorted indices before writing a reuse warp to this data.
+      this.newSplatPackPending = true
     }
 
     // A new splat state can arrive while the reuse warp is still current (the
@@ -561,7 +576,11 @@ export class SplatOutputPanel {
     this.frameLabel.textContent = 'Frame: --'
     this.splatLabel.textContent = 'Splats: --'
     this.pendingStatePresented = false
+    this.newSplatPackPending = false
     this.setCaptureToDisplay(null)
+    delete this.element.dataset.latencyFrame
+    delete this.element.dataset.latencyCount
+    delete this.element.dataset.latencySortedCount
     this.showPlaceholder(message)
     this.updateStatus()
   }
@@ -672,8 +691,11 @@ export class SplatOutputPanel {
       // The gsplat data worker is still packing; retry on the next frame.
       return
     }
-    if (performance.now() < this.descriptorReadyAt) {
-      return
+    if (this.newSplatPackPending) {
+      if (!this.rendererHasPackedState()) {
+        return
+      }
+      this.newSplatPackPending = false
     }
     const data = splat.data
     const target = data.positions
@@ -861,13 +883,25 @@ export class SplatOutputPanel {
     this.updateProjection()
   }
 
-  /**
-   * True when the active splat's own data is attached and ready to draw.
-   *
-   * The gsplat data worker detaches buffers while it packs, and a new SplatData
-   * waits before its first change event. A render call can return before the
-   * new state is visible, so the latency label must wait for this condition.
-   */
+  /** True after gsplat has sorted the active splat's first packed data. */
+  private rendererHasPackedState(): boolean {
+    const splat = this.activeSplat
+    const program = this.renderer?.renderProgram
+    const renderData = program?.renderData
+    if (
+      splat === null || program === undefined ||
+      renderData === null || renderData === undefined
+    ) {
+      return false
+    }
+    // A new object rebuilds renderData. Its sort worker returns one index per
+    // splat only after the initial pack has reached the renderer.
+    return renderData.offsets.has(splat)
+      && renderData.vertexCount === this.splatCount
+      && program.depthIndex.length === this.splatCount
+  }
+
+  /** True when the active splat's packed data is ready to draw. */
   private stateDataReady(): boolean {
     if (this.activeSplat === null || this.basePositions === null) {
       return false
@@ -876,7 +910,7 @@ export class SplatOutputPanel {
     if (data.detached) {
       return false
     }
-    if (performance.now() < this.descriptorReadyAt) {
+    if (this.newSplatPackPending || !this.rendererHasPackedState()) {
       return false
     }
     if (this.descriptorDirty || this.warpDirty) {
@@ -897,6 +931,9 @@ export class SplatOutputPanel {
       this.showError(error)
       return
     }
+    if (this.newSplatPackPending && this.rendererHasPackedState()) {
+      this.newSplatPackPending = false
+    }
     if (this.pendingStatePresented && this.stateDataReady()) {
       // This render shows the inserted state's own data.
       this.pendingStatePresented = false
@@ -908,6 +945,7 @@ export class SplatOutputPanel {
         // Debug identity: the label belongs to this rendered state.
         this.element.dataset.latencyFrame = this.activeFrameId ?? ''
         this.element.dataset.latencyCount = String(this.splatCount)
+        this.element.dataset.latencySortedCount = String(this.renderer.renderProgram.depthIndex.length)
       }
     }
     this.frameCounter++
