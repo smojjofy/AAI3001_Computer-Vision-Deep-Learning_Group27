@@ -17,7 +17,60 @@ from dataclasses import dataclass
 import numpy as np
 
 from .adapters import DepthThresholdConfig, DepthThresholdMask, depth_threshold_mask
-from .background_calibration import BackgroundBaseline, person_vs_background_mask
+from .background_calibration import (
+    BackgroundBaseline,
+    nearer_than_background,
+    person_vs_background_mask,
+)
+
+MIN_JOINT_VISIBILITY = 0.3
+
+
+def pose_region_mask(
+    joints: list[dict],
+    *,
+    width: int,
+    height: int,
+    margin_fraction: float = 0.15,
+) -> np.ndarray | None:
+    """Dilated bounding region around the visible pose joints.
+
+    The region is a spatial prior for the background comparison, so depth noise
+    outside the person cannot become part of the candidate mask. Returns None
+    when no joint is usable.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    for joint in joints:
+        x = joint.get("x")
+        y = joint.get("y")
+        visibility = joint.get("visibility")
+        if x is None or y is None:
+            continue
+        try:
+            x = float(x)
+            y = float(y)
+        except (TypeError, ValueError):
+            continue
+        if visibility is not None and float(visibility) < MIN_JOINT_VISIBILITY:
+            continue
+        if not (np.isfinite(x) and np.isfinite(y)):
+            continue
+        xs.append(x)
+        ys.append(y)
+    if not xs:
+        return None
+    margin_x = max(2, int(round(margin_fraction * width)))
+    margin_y = max(2, int(round(margin_fraction * height)))
+    left = max(0, int(min(xs) * width) - margin_x)
+    right = min(width, int(max(xs) * width) + margin_x)
+    top = max(0, int(min(ys) * height) - margin_y)
+    bottom = min(height, int(max(ys) * height) + margin_y)
+    if right <= left or bottom <= top:
+        return None
+    region = np.zeros((height, width), dtype=np.uint8)
+    region[top:bottom, left:right] = 1
+    return region
 
 
 @dataclass(frozen=True)
@@ -27,6 +80,7 @@ class MaskSelection:
     info: DepthThresholdMask
     source: str
     fallback_reason: str | None = None
+    background_area_fraction: float | None = None
 
     @property
     def calibrated(self) -> bool:
@@ -72,6 +126,7 @@ def select_person_mask(
     config: DepthThresholdConfig | None = None,
     near_margin_m: float = 0.30,
     max_span_m: float = 1.5,
+    pose_joints: list[dict] | None = None,
 ) -> MaskSelection:
     """Select a person mask for this depth frame.
 
@@ -91,6 +146,42 @@ def select_person_mask(
                 depth_threshold_mask(depth, config),
                 "depth_threshold",
                 "baseline_identity_mismatch",
+            )
+        region = None if pose_joints is None else pose_region_mask(
+            pose_joints, width=width, height=height
+        )
+        if region is not None:
+            raw_mask, raw_valid = nearer_than_background(
+                depth,
+                baseline,
+                near_margin_m=near_margin_m,
+                max_span_m=max_span_m,
+            )
+            gated = np.logical_and(raw_mask.astype(bool), region.astype(bool))
+            gated_area = float(gated.mean()) if gated.size else 0.0
+            if config.min_area_fraction <= gated_area <= config.max_area_fraction:
+                return MaskSelection(
+                    _background_threshold_mask(
+                        depth,
+                        gated.astype(np.uint8),
+                        np.logical_and(raw_valid > 0, gated).astype(np.float32),
+                    ),
+                    "background_calibrated",
+                    None,
+                )
+            comparison = person_vs_background_mask(
+                depth,
+                baseline,
+                near_margin_m=near_margin_m,
+                max_span_m=max_span_m,
+                min_area_fraction=config.min_area_fraction,
+                max_area_fraction=config.max_area_fraction,
+            )
+            return MaskSelection(
+                depth_threshold_mask(depth, config),
+                "depth_threshold_fallback",
+                comparison.reason if not comparison.detected else "pose_gate_too_small",
+                comparison.area_fraction,
             )
         comparison = person_vs_background_mask(
             depth,
@@ -112,6 +203,7 @@ def select_person_mask(
             depth_threshold_mask(depth, config),
             "depth_threshold_fallback",
             comparison.reason,
+            comparison.area_fraction,
         )
 
     reason = None

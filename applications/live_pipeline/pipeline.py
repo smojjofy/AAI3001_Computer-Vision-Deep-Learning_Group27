@@ -242,12 +242,25 @@ class RefreshPipeline:
             raise RefreshError(self.last_error, person_missing=True)
 
         depth_m = np.asarray(result.depth.depth, dtype=np.float32)
+        pose_joints_for_mask = None
+        try:
+            pose_joints_for_mask = [
+                {
+                    "x": float(landmark.x),
+                    "y": float(landmark.y),
+                    "visibility": None if landmark.visibility is None else float(landmark.visibility),
+                }
+                for landmark in result.pose.landmarks
+            ]
+        except (AttributeError, TypeError, ValueError):
+            pose_joints_for_mask = None
         mask_selection = select_person_mask(
             depth_m,
             baseline=self.background_baseline,
             source_id=packet.source_id,
             generation=job_generation,
             config=self.mask_config,
+            pose_joints=pose_joints_for_mask,
         )
         mask_info = mask_selection.info
         if not mask_info.detected:
@@ -339,6 +352,7 @@ class RefreshPipeline:
         header["depth_units_metres"] = True
         header["mask"]["source"] = mask_selection.source
         header["mask"]["fallback_reason"] = mask_selection.fallback_reason
+        header["mask"]["background_area_fraction"] = mask_selection.background_area_fraction
         pose_joints = None
         if pose_preview is not None:
             candidate_joints = pose_preview.get("joints")

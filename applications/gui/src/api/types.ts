@@ -72,6 +72,9 @@ export interface MotionPayload {
 }
 
 export interface SplatMask {
+  source?: string
+  fallback_reason?: string | null
+  background_area_fraction?: number | null
   near_m: number | null
   far_m: number | null
   area_fraction: number

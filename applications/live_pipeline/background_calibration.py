@@ -151,6 +151,32 @@ class CalibrationState:
     calibration_count: int = 0
 
 
+def nearer_than_background(
+    depth_m: np.ndarray,
+    baseline: BackgroundBaseline,
+    *,
+    near_margin_m: float = 0.30,
+    max_span_m: float = 1.5,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Raw nearer-than-background mask, before any area guard.
+
+    The caller applies a pose region or an area limit. Keeping the raw mask
+    separate lets a pose-gated selection recover a candidate whose whole-image
+    area would exceed the global guard.
+    """
+    depth = np.asarray(depth_m, dtype=np.float32)
+    if depth.shape != baseline.depth_m.shape:
+        raise CalibrationError(
+            "depth size {} does not match the baseline size {}".format(depth.shape, baseline.depth_m.shape)
+        )
+    valid = np.isfinite(depth) & (depth > 0.0)
+    reference = baseline.depth_m
+    usable = valid & np.isfinite(reference)
+    difference = np.where(usable, reference - depth, 0.0).astype(np.float32)
+    nearer = usable & (difference >= float(near_margin_m)) & (difference <= float(max_span_m))
+    return nearer.astype(np.uint8), (valid & nearer).astype(np.float32)
+
+
 @dataclass(frozen=True)
 class BackgroundMask:
     """Result of comparing one depth frame with the background baseline."""
@@ -186,25 +212,19 @@ def person_vs_background_mask(
     the area guard, ``too_small`` or ``too_large`` when it fails it, and
     ``no_foreground`` when nothing is nearer than the background.
     """
-    depth = np.asarray(depth_m, dtype=np.float32)
-    if depth.shape != baseline.depth_m.shape:
-        raise CalibrationError(
-            "depth size {} does not match the baseline size {}".format(depth.shape, baseline.depth_m.shape)
-        )
-    valid = np.isfinite(depth) & (depth > 0.0)
-    reference = baseline.depth_m
-    usable = valid & np.isfinite(reference)
-    # Only usable pixels have a comparable baseline; every other pixel stays 0
-    # in ``difference`` so it can never pass the nearer-than-background test.
-    difference = np.where(usable, reference - depth, 0.0).astype(np.float32)
-    nearer = usable & (difference >= float(near_margin_m)) & (difference <= float(max_span_m))
-    mask = nearer.astype(np.uint8)
+    mask, validity = nearer_than_background(
+        depth_m,
+        baseline,
+        near_margin_m=near_margin_m,
+        max_span_m=max_span_m,
+    )
+    nearer = mask.astype(bool)
     area_fraction = float(mask.mean()) if mask.size else 0.0
-    empty = BackgroundMask(np.zeros_like(mask), np.zeros(depth.shape, dtype=np.float32), area_fraction)
+    empty = BackgroundMask(np.zeros_like(mask), np.zeros(mask.shape, dtype=np.float32), area_fraction)
     if not nearer.any():
         return BackgroundMask(empty.mask, empty.validity, area_fraction, "no_foreground")
     if area_fraction < min_area_fraction:
         return BackgroundMask(empty.mask, empty.validity, area_fraction, "too_small")
     if area_fraction > max_area_fraction:
         return BackgroundMask(empty.mask, empty.validity, area_fraction, "too_large")
-    return BackgroundMask(mask, (valid & nearer).astype(np.float32), area_fraction, "ok")
+    return BackgroundMask(mask, validity, area_fraction, "ok")

@@ -374,6 +374,8 @@ def main() -> None:
                         "ms": {key: round(value, 1) for key, value in outcome.timings_ms.items()},
                         "capture_age_ms": None if outcome.capture_age_ms is None else round(outcome.capture_age_ms, 1),
                         "mask_area": round(float(outcome.mask.area_fraction), 3),
+                        "mask_source": outcome.header.get("mask", {}).get("source"),
+                        "bg_area": outcome.header.get("mask", {}).get("background_area_fraction"),
                     }
                 ),
                 flush=True,

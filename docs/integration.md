@@ -349,6 +349,36 @@ before it publishes first-pack latency. This replaces the fixed 400 ms readiness
 wait. The check uses the active object, its vertex count, and the sorted-index
 count; a slow first pack keeps the label pending.
 
+## Phase A.1 pose-gated background calibration (RT-0055)
+
+The first Phase A comparison showed the background comparison alone was too
+noisy: 79 percent of calibrated refreshes fell back because depth noise made the
+candidate region too large. The fix restricts the comparison to a spatial prior
+from the pose:
+
+- `pose_region_mask` builds a dilated bounding region around joints with
+  visibility at least 0.3. The region margin is 15 percent of each image axis.
+- The raw nearer-than-background pixels are intersected with that region, then
+  the existing area guard runs. Depth noise outside the person cannot inflate the
+  candidate, and the depth-threshold band is still the fallback.
+- The pipeline derives the mask joints from the same pose estimate as the
+  refresh, so the prior always belongs to the selected frame.
+- Refresh log lines now record `mask_source` and the rejected `bg_area`, so a
+  calibration that is not being used is visible in the log instead of silent.
+
+Measured on a live camera, person swaying 30 s:
+
+| Run | Refreshes | Mask source | Splat stdev | Splat min–max |
+|---|---|---|---|---|
+| P3 uncalibrated | 116 | depth band | 7,712 | 13,199–42,091 |
+| Phase A (no pose gate) | 233 | 79% fallback | 9,857 | 3,873–46,180 |
+| Phase A.1 (pose gate) | 191 post-calibration | **191 calibrated, 0 fallback** | **3,510** | **11,128–28,979** |
+
+The calibrated run lowers splat-count variation by about 54 percent against the
+uncalibrated reference and removes the fallback storms. The mean count is lower
+because the calibrated mask covers the person body instead of the thicker depth
+band, which is the intended behaviour.
+
 ## Phase A empty-scene background calibration (RT-0053)
 
 - **Manual capture.** `POST /api/calibrate` with an optional `seconds` body asks
