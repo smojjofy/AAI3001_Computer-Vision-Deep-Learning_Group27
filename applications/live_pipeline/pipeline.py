@@ -17,7 +17,8 @@ import numpy as np
 
 from .background_calibration import BackgroundBaseline
 from .camera_config import CameraConfig
-from .mask_selection import select_person_mask
+from .mask_selection import select_pose_gradient_mask
+from .pose_gradient_mask import gate_validity_to_joint_depth
 from .telemetry import capture_age_ms as capture_age_ms_at, stage_total
 
 from .adapters import (
@@ -244,25 +245,42 @@ class RefreshPipeline:
         depth_m = np.asarray(result.depth.depth, dtype=np.float32)
         pose_joints_for_mask = None
         try:
-            pose_joints_for_mask = [
-                {
+            joint_depths = getattr(result, "joint_depth", None)
+            pose_joints_for_mask = []
+            for index, landmark in enumerate(result.pose.landmarks):
+                depth_value = None
+                if joint_depths is not None and index < len(joint_depths):
+                    candidate = joint_depths[index]
+                    if candidate is not None and np.isfinite(candidate):
+                        depth_value = float(candidate)
+                pose_joints_for_mask.append({
+                    "index": index,
                     "x": float(landmark.x),
                     "y": float(landmark.y),
                     "visibility": None if landmark.visibility is None else float(landmark.visibility),
-                }
-                for landmark in result.pose.landmarks
-            ]
+                    "depth_m": depth_value,
+                })
         except (AttributeError, TypeError, ValueError):
             pose_joints_for_mask = None
-        mask_selection = select_person_mask(
+        mask_selection = select_pose_gradient_mask(
             depth_m,
-            baseline=self.background_baseline,
-            source_id=packet.source_id,
-            generation=job_generation,
-            config=self.mask_config,
             pose_joints=pose_joints_for_mask,
+            config=self.mask_config,
         )
         mask_info = mask_selection.info
+        if mask_selection.source == "pose_gradient":
+            gated_validity = gate_validity_to_joint_depth(
+                mask_info.mask, depth_m, pose_joints_for_mask
+            )
+            mask_info = DepthThresholdMask(
+                mask=mask_info.mask,
+                validity=gated_validity,
+                near_m=mask_info.near_m,
+                far_m=mask_info.far_m,
+                valid_fraction=mask_info.valid_fraction,
+                area_fraction=mask_info.area_fraction,
+                confidence=mask_info.confidence,
+            )
         if not mask_info.detected:
             self.failure_count += 1
             reason = "mask area {:.3f} outside [{:.3f}, {:.3f}]".format(

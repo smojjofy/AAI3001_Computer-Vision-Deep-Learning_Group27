@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .adapters import DepthThresholdConfig, DepthThresholdMask, depth_threshold_mask
+from .pose_gradient_mask import pose_watershed_mask
 from .background_calibration import (
     BackgroundBaseline,
     nearer_than_background,
@@ -210,3 +211,44 @@ def select_person_mask(
     if baseline is not None:
         reason = "baseline_identity_mismatch"
     return MaskSelection(depth_threshold_mask(depth, config), "depth_threshold", reason)
+
+
+def select_pose_gradient_mask(
+    depth_m: np.ndarray,
+    *,
+    pose_joints: list[dict] | None,
+    config: DepthThresholdConfig | None = None,
+    pose_margin: float = 0.12,
+) -> MaskSelection:
+    """Use the pose-seeded watershed gradient mask, with the band as fallback.
+
+    The gradient mask needs a depth discontinuity around the pose. When it is not
+    available (no pose, flat depth, or area guard failure) the depth-threshold
+    band runs and the reason is recorded.
+    """
+    config = config or DepthThresholdConfig()
+    depth = np.asarray(depth_m, dtype=np.float32)
+    if depth.ndim != 2:
+        raise ValueError("depth_m must be a 2-D array")
+    mask, reason = pose_watershed_mask(
+        depth,
+        pose_joints,
+        pose_margin=pose_margin,
+        min_area_fraction=config.min_area_fraction,
+        max_area_fraction=config.max_area_fraction,
+    )
+    if reason == "ok":
+        return MaskSelection(
+            _background_threshold_mask(
+                depth,
+                mask,
+                np.isfinite(depth).astype(np.float32),
+            ),
+            "pose_gradient",
+            None,
+        )
+    return MaskSelection(
+        depth_threshold_mask(depth, config),
+        "depth_threshold_fallback",
+        reason,
+    )

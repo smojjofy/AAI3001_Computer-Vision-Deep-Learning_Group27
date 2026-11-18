@@ -407,6 +407,31 @@ band, which is the intended behaviour.
   span limit, both area-guard sides, fallback reasons, and every identity
   mismatch.
 
+## Pose-seeded depth-gradient mask (RT-0057)
+
+The mean-depth threshold is no longer the primary person mask. The mask is built
+from the depth gradient, seeded by the pose:
+
+1. Sobel gradient magnitude of the depth plane (invalid depth median-filled).
+2. Watershed on that gradient, with visible pose joints as foreground markers and
+   the area outside a 12 percent pose box as background.
+3. Region kept inside the pose box, closed, and contour-filled.
+4. Background removal: pixels whose depth is outside the visible-joint depth range
+   (p10-p90 plus 0.35 m) are dropped, which removes background that leaks through
+   weak edges between fingers or behind the head.
+5. Fingertip discs and head/hand pose hulls are re-added inside that depth range,
+   so a weak edge at a fist or the hairline does not chop the person.
+6. Construction validity is limited to the same joint-depth range, so
+   background-depth pixels inside the silhouette produce no splats. Measured on
+   a live frame, the face box contained background depth up to 2.26 m while the
+   pose joints reported about 0.75 m; that mismatch warped the face.
+7. If the gradient mask fails (no pose, flat depth, or area guard), the
+   depth-threshold band runs and `fallback_reason` records why.
+
+Template matching, mean-threshold calibration and background baselines are no
+longer on the mask path; the empty-scene calibration modules remain for the
+record and can be revisited.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.
