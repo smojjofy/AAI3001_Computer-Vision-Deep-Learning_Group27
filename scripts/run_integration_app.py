@@ -78,6 +78,12 @@ def main() -> None:
     parser.add_argument("--queue-capacity", type=int, default=3)
     parser.add_argument("--sample-stride", type=int, default=2, help="Constructor pixel stride")
     parser.add_argument("--horizontal-fov-deg", type=float, default=60.0)
+    parser.add_argument(
+        "--camera-config",
+        type=Path,
+        default=None,
+        help="Optional pinhole intrinsics JSON for the capture resolution",
+    )
     parser.add_argument("--depth-band-m", type=float, default=0.75)
     parser.add_argument("--depth-near-percentile", type=float, default=2.0)
     parser.add_argument("--max-mask-area", type=float, default=0.60, help="Reject masks larger than this image fraction")
@@ -100,6 +106,14 @@ def main() -> None:
     run_guard = RunGuard(0)
     run_counters = RunCounters(0)
     packet_tracker = PacketRunTracker()
+    camera_config = None
+    if args.camera_config is not None:
+        from live_pipeline.camera_config import load_camera_config
+
+        try:
+            camera_config = load_camera_config(args.camera_config)
+        except (OSError, ValueError) as error:
+            raise SystemExit(f"camera config {args.camera_config} is invalid: {error}")
     pipeline = RefreshPipeline(
         mask_config=DepthThresholdConfig(
             band_m=args.depth_band_m,
@@ -108,6 +122,7 @@ def main() -> None:
         ),
         sample_stride=args.sample_stride,
         horizontal_fov_deg=args.horizontal_fov_deg,
+        camera_config=camera_config,
         yolo_model=args.yolo_model,
         device=args.device_inference,
         require_pose=not args.allow_missing_pose,

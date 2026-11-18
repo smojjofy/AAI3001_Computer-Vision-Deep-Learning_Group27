@@ -257,6 +257,31 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   capture age at publish + server state age + browser parse and render time.
   For a recorded source this is publish-to-display latency.
 
+## Phase 2 features (2026-11-18)
+
+- **Depth-tab skeleton (RT Phase 2).** The Depth tab draws the pose skeleton over
+  the depth image from the joints in the same pose-depth payload, using
+  `src/api/skeleton.ts`. The overlay is drawn only for the displayed depth state,
+  so it cannot show joints from another state. The footer shows the joint count.
+- **Per-camera intrinsics.** `--camera-config <json>` loads pinhole intrinsics for
+  one capture resolution. A different resolution falls back to the field-of-view
+  estimate, and capture intrinsics still take precedence.
+
+  ```json
+  {"model": "pinhole", "width": 1280, "height": 720,
+   "fx": 900.0, "fy": 900.0, "cx": 640.0, "cy": 360.0}
+  ```
+
+  The `horizontal_fov_deg` variant is accepted instead of `fx`/`fy`/`cx`/`cy`.
+- **Setup checks.** `scripts/setup_device.ps1` now builds and tests the native
+  Splat Constructor and fails unless both exit 0. `-SkipNative` skips that step.
+  The Python checks moved to `scripts/check_device_setup.py` because Windows
+  PowerShell 5.1 drops inner double quotes from a native `python -c` argument.
+- **Depth validity.** The mask validity plane is passed to the construction frame
+  (`depth_validity=mask_info.validity`) and covered by
+  `test_construction_frame_replaces_nan_and_keeps_validity`; invalid depth is
+  replaced with zero validity, never a non-finite value.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.

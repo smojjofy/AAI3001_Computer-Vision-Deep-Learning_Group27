@@ -14,6 +14,7 @@ import type {
   MotionPayload,
   PoseDepthFrame,
 } from '../api/types'
+import { skeletonSegments, visibleJoints } from '../api/skeleton'
 
 type ProcessorView = 'rgba' | 'mask' | 'depth' | 'motion'
 
@@ -247,12 +248,16 @@ export class FrameProcessorPanel {
           return
         }
         this.drawImage(this.depthImage)
+        this.drawSkeletonOverlay(this.depthMeta)
         this.drawDepthOverlay(this.depthMeta)
         this.setFooter([
           `Frame: ${this.depthMeta.frame_id}`,
           `Source: ${this.depthMeta.depth_source}`,
           `Depth: ${formatRange(this.depthMeta.near_m, this.depthMeta.far_m)} m`,
-          `Processing: ${formatNumber(this.depthMeta.timings_ms.total, 1)} ms`,
+          `Pose: ${this.depthMeta.joints.length} joints  ·  ${formatNumber(
+            this.depthMeta.timings_ms.total ?? 0,
+            1,
+          )} ms`,
         ])
         return
 
@@ -316,6 +321,34 @@ export class FrameProcessorPanel {
     lines.forEach((line, index) => {
       context.fillText(line, 24, 50 + index * 18)
     })
+  }
+
+  /** Draw the pose skeleton from the joints in the same depth payload. */
+  private drawSkeletonOverlay(meta: PoseDepthFrame): void {
+    const context = this.canvas.getContext('2d')
+    if (!context || meta.joints.length === 0) {
+      return
+    }
+    const width = this.canvas.width
+    const height = this.canvas.height
+    const toX = (joint: { x: number | null }): number => (joint.x ?? 0) * width
+    const toY = (joint: { y: number | null }): number => (joint.y ?? 0) * height
+
+    context.lineWidth = Math.max(1.5, width / 320)
+    context.strokeStyle = 'rgba(80, 240, 180, 0.9)'
+    context.fillStyle = 'rgba(255, 255, 255, 0.95)'
+    for (const [start, end] of skeletonSegments(meta.joints)) {
+      context.beginPath()
+      context.moveTo(toX(start), toY(start))
+      context.lineTo(toX(end), toY(end))
+      context.stroke()
+    }
+    const radius = Math.max(2, width / 240)
+    for (const joint of visibleJoints(meta.joints)) {
+      context.beginPath()
+      context.arc(toX(joint), toY(joint), radius, 0, Math.PI * 2)
+      context.fill()
+    }
   }
 
   private drawDepthOverlay(meta: PoseDepthFrame): void {

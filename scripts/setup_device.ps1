@@ -1,5 +1,6 @@
 param(
     [switch]$WithRaft,
+    [switch]$SkipNative,
     [ValidateSet('auto', 'cpu', 'cu118', 'cu126', 'cu128')]
     [string]$TorchWheel = 'auto'
 )
@@ -47,7 +48,11 @@ try {
         Invoke-Checked -Executable $launcher.Source -Arguments $venvArguments
     }
 
-    Invoke-Checked -Executable $venvPython -Arguments @('-c', 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ is required"')
+    $checkScript = Join-Path $PSScriptRoot 'check_device_setup.py'
+    if (-not (Test-Path -LiteralPath $checkScript)) {
+        throw "Setup check script not found: $checkScript"
+    }
+    Invoke-Checked -Executable $venvPython -Arguments @($checkScript, 'python')
     Write-Host 'Installing local pipeline modules...'
     Invoke-Checked -Executable $venvPython -Arguments @(
         '-m', 'pip', 'install',
@@ -63,16 +68,34 @@ try {
             '-m', 'pip', 'install', 'torch', 'torchvision',
             '--index-url', "https://download.pytorch.org/whl/$selectedWheel"
         )
-        Invoke-Checked -Executable $venvPython -Arguments @(
-            '-c',
-            'import torch, torchvision; print("PyTorch", torch.__version__, "Torchvision", torchvision.__version__, "CUDA available", torch.cuda.is_available())'
-        )
+        Invoke-Checked -Executable $venvPython -Arguments @($checkScript, 'torch')
     }
 
-    Invoke-Checked -Executable $venvPython -Arguments @(
-        '-c',
-        'import cv2, stream_handler, optical_flow, reranker; print("Setup OK; OpenCV", cv2.__version__)'
-    )
+    Invoke-Checked -Executable $venvPython -Arguments @($checkScript, 'imports')
+
+    if (-not $SkipNative) {
+        Write-Host 'Building and testing the native Splat Constructor...'
+        $buildScript = Join-Path $repoRoot 'scripts\build_splat_constructor.ps1'
+        if (-not (Test-Path -LiteralPath $buildScript)) {
+            throw "Native build script not found: $buildScript"
+        }
+        & $buildScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "Native Splat Constructor build failed with exit code $LASTEXITCODE."
+        }
+        $nativeTests = Join-Path $repoRoot 'build\splat_constructor\splat_constructor_tests.exe'
+        if (-not (Test-Path -LiteralPath $nativeTests)) {
+            throw "Native test executable was not produced: $nativeTests"
+        }
+        & $nativeTests
+        if ($LASTEXITCODE -ne 0) {
+            throw "Native Splat Constructor tests failed with exit code $LASTEXITCODE."
+        }
+        Write-Host 'Native Splat Constructor build and tests passed.'
+    } else {
+        Write-Host 'Skipped the native Splat Constructor build (-SkipNative).'
+    }
+
     Write-Host 'Setup complete. DIS optical flow works on CPU; RAFT uses CUDA when the installed PyTorch build and driver support it.'
 }
 finally {

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from applications.live_pipeline.adapters import webcam_intrinsics
+from applications.live_pipeline.camera_config import CameraConfig
 from applications.live_pipeline.pipeline import RefreshError, RefreshPipeline
 
 
@@ -65,3 +66,16 @@ def test_pipeline_generation_defaults_and_sets() -> None:
     assert pipeline.generation == 5
     with pytest.raises(ValueError):
         pipeline._ensure_intrinsics(FakePacket(0, 0))
+
+
+def test_camera_config_supplies_intrinsics_only_for_its_resolution() -> None:
+    config = CameraConfig(width=640, height=480, intrinsics=(700.0, 710.0, 320.0, 240.0))
+    pipeline = RefreshPipeline(device="cpu", camera_config=config)
+    assert pipeline._ensure_intrinsics(FakePacket(640, 480)) == (700.0, 710.0, 320.0, 240.0)
+    # A different resolution must not keep calibration values from another size.
+    other = pipeline._ensure_intrinsics(FakePacket(1280, 720))
+    assert other == webcam_intrinsics(1280, 720, pipeline.horizontal_fov_deg)
+    # Capture intrinsics take precedence over the file.
+    assert pipeline._ensure_intrinsics(
+        FakePacket(640, 480, (500.0, 500.0, 300.0, 200.0))
+    ) == (500.0, 500.0, 300.0, 200.0)

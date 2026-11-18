@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check:identity": "npm run compile:helpers && node tools/check-identity.mjs && node tools/check-display-paths.mjs",
-    "compile:helpers": "tsc src/api/identity.ts src/api/displayGuard.ts src/api/fetchRunner.ts --ignoreConfig --outDir .tmp-identity --target es2022 --module es2022"
+    "compile:helpers": "tsc src/api/identity.ts src/api/displayGuard.ts src/api/fetchRunner.ts src/api/skeleton.ts --ignoreConfig --outDir .tmp-identity --target es2022 --module es2022"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",

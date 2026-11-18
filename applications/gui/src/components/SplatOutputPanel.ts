@@ -170,6 +170,7 @@ export class SplatOutputPanel {
         <span class="splat-footer-item splat-count">Splats: --</span>
         <span class="splat-footer-item splat-fps">Render FPS: --</span>
         <span class="splat-footer-item splat-alpha">Alpha: --</span>
+        <span class="splat-footer-item splat-latency">Display: --</span>
       </div>
     `
 

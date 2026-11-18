@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 
+from .camera_config import CameraConfig
 from .telemetry import capture_age_ms as capture_age_ms_at, stage_total
 
 from .adapters import (
@@ -99,6 +100,7 @@ class RefreshPipeline:
     mask_config: DepthThresholdConfig = field(default_factory=DepthThresholdConfig)
     sample_stride: int = 2
     horizontal_fov_deg: float = 60.0
+    camera_config: CameraConfig | None = None
     yolo_model: str | None = None
     yolo_imgsz: int = 640
     device: str = "auto"
@@ -146,9 +148,18 @@ class RefreshPipeline:
         A resolution change, a calibration change, or a source restart must not
         keep focal lengths from an earlier image size.
         """
-        key = self._intrinsics_key_for(packet.width, packet.height, packet.intrinsics)
+        intrinsics_arg = packet.intrinsics
+        if (
+            intrinsics_arg is None
+            and self.camera_config is not None
+            and self.camera_config.matches(packet.width, packet.height)
+        ):
+            # A calibrated camera supplies pinhole intrinsics for this
+            # resolution. A different resolution falls back to the estimate.
+            intrinsics_arg = self.camera_config.intrinsics
+        key = self._intrinsics_key_for(packet.width, packet.height, intrinsics_arg)
         if self._intrinsics is None or self._intrinsics_key != key:
-            self.configure_for_frame(packet.width, packet.height, packet.intrinsics)
+            self.configure_for_frame(packet.width, packet.height, intrinsics_arg)
         intrinsics = self._intrinsics
         assert intrinsics is not None
         return intrinsics

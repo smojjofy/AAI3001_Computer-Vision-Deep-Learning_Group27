@@ -23,6 +23,7 @@ async function loadModule(name) {
 }
 
 const guard = await loadModule('displayGuard')
+const skeleton = await loadModule('skeleton')
 const runner = await loadModule('fetchRunner')
 const {
   depthDisplayDecision,
@@ -31,6 +32,7 @@ const {
   auxMatchesActive,
 } = guard
 const { runFetchWithEpoch } = runner
+const { skeletonSegments, visibleJoints, MIN_VISIBILITY } = skeleton
 
 let failures = 0
 function check(name, condition) {
@@ -139,6 +141,21 @@ function delay(ms, value) {
   check('a failure retries itself when nothing newer is pending', pendingAfterFailure(null, failed) === failed)
   check('a failure retries itself when it is still pending', pendingAfterFailure(failed, failed) === failed)
   check('a discarded response still drains the queued request', shouldDrainSplat(newer, null) === true)
+}
+
+// 6. Skeleton overlay boundaries: visibility, missing coordinates, connections.
+{
+  const joint = (index, x, y, visibility = 1.0) => ({ index, x, y, visibility })
+  check('a visible connected pair makes a segment', skeletonSegments([joint(11, 0.4, 0.4), joint(12, 0.6, 0.4)]).length === 1)
+  check('a low-visibility joint is excluded', skeletonSegments([joint(11, 0.4, 0.4, 0.2), joint(12, 0.6, 0.4)]).length === 0)
+  check('a joint exactly at the visibility floor is included', visibleJoints([joint(11, 0.4, 0.4, MIN_VISIBILITY)]).length === 1)
+  check('missing coordinates are excluded', visibleJoints([joint(11, null, 0.4)]).length === 0)
+  check('non-finite coordinates are excluded', visibleJoints([joint(11, Number.NaN, 0.4)]).length === 0)
+  check('unconnected visible joints make no segment', skeletonSegments([joint(11, 0.4, 0.4), joint(0, 0.5, 0.1)]).length === 0)
+  check('empty joints make no segment', skeletonSegments([]).length === 0)
+  check('a full pose yields connected segments', skeletonSegments(
+    Array.from({ length: 33 }, (_, index) => joint(index, 0.5, 0.5)),
+  ).length > 20)
 }
 
 if (failures > 0) {

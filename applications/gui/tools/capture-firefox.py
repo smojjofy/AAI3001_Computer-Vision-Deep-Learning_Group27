@@ -71,7 +71,7 @@ def main() -> int:
 def json_summary(driver) -> str:
     text = driver.execute_script("return document.body.innerText")
     compact = " ".join(text.split())
-    return f"PAGE_TEXT: {compact[:800]}"
+    return f"PAGE_TEXT: {compact[:2000]}"
 
 
 if __name__ == "__main__":
