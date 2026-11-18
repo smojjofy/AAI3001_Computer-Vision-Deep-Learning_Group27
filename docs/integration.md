@@ -324,6 +324,26 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   the real panel in Firefox and asserts a non-placeholder first value, a
   same-count update, and a splat-count-change update.
 
+## Latency readiness and interval corrections (RT-0048)
+
+- **Disjoint latency intervals.** The estimate adds capture age (capture to
+  publish), server state age (publish to server response), and the browser render
+  wait (decoded response to the first render that shows the state). The browser
+  request interval is not added, because a request that starts between publish
+  and server response overlaps the server state age and would count part of the
+  timeline twice. Transport transit and the browser-to-server clock offset
+  cannot be measured with these clocks, so the value stays `Display (est)`.
+- **Label waits for drawn data.** The panel keeps the state pending presentation
+  until its own splat data is attached (`SplatData.detached` false), the
+  descriptor is applied (no dirty flags), the data length matches the new state,
+  and any new-object readiness wait has passed. Only then does it publish the
+  label, and it records `data-latency-frame` and `data-latency-count` on the
+  panel for the state whose data was actually ready and drawn.
+- **Browser check proves identity.** `check-latency-browser.py` now reads those
+  data attributes and fails when a label is published without a rendered splat
+  identity. The panel debug identity can lag the footer's newest frame, which is
+  expected: the footer follows the header, the label follows the rendered data.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.

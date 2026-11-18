@@ -120,13 +120,17 @@ function parseMaskIdentity(headers: Headers): ActiveStateIdentity | null {
   }
 }
 
-export async function fetchSplat(): Promise<ApiResult<SplatFrame>> {
+export async function fetchSplat(
+  onDecoded?: (decodedAt: number) => void,
+): Promise<ApiResult<SplatFrame>> {
   const result = await request('/api/splat', 'application/octet-stream')
   if (result.kind !== 'ok') {
     return result
   }
   try {
-    return { kind: 'ok', data: decodeSplatPayload(result.data) }
+    const frame = decodeSplatPayload(result.data)
+    onDecoded?.(performance.now())
+    return { kind: 'ok', data: frame }
   } catch (error) {
     return { kind: 'error', error: describeError(error) }
   }

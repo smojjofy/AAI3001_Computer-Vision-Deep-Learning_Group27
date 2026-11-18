@@ -148,7 +148,7 @@ export class SplatOutputPanel {
 
   constructor() {
     this.element = document.createElement('section')
-    this.element.className = 'viewer-panel'
+    this.element.className = 'viewer-panel splat-panel'
 
     this.element.innerHTML = `
       <div class="panel-header">
@@ -861,12 +861,35 @@ export class SplatOutputPanel {
     this.updateProjection()
   }
 
+  /**
+   * True when the active splat's own data is attached and ready to draw.
+   *
+   * The gsplat data worker detaches buffers while it packs, and a new SplatData
+   * waits before its first change event. A render call can return before the
+   * new state is visible, so the latency label must wait for this condition.
+   */
+  private stateDataReady(): boolean {
+    if (this.activeSplat === null || this.basePositions === null) {
+      return false
+    }
+    const data = this.activeSplat.data
+    if (data.detached) {
+      return false
+    }
+    if (performance.now() < this.descriptorReadyAt) {
+      return false
+    }
+    if (this.descriptorDirty || this.warpDirty) {
+      return false
+    }
+    return data.positions.length === this.basePositions.length
+  }
+
   private renderFrame(): void {
     if (this.disposed || this.renderer === null || this.controls === null) {
       return
     }
     this.applyPendingDescriptor()
-    const renderAt = performance.now()
     try {
       this.controls.update()
       this.renderer.render(this.scene, this.camera)
@@ -874,14 +897,17 @@ export class SplatOutputPanel {
       this.showError(error)
       return
     }
-    if (this.pendingStatePresented) {
-      // This is the first completed render that shows the state, including the
-      // new-object path and a changed splat count.
+    if (this.pendingStatePresented && this.stateDataReady()) {
+      // This render shows the inserted state's own data.
       this.pendingStatePresented = false
+      const renderAt = performance.now()
       const phases = this.pendingLatency
       this.pendingLatency = null
       if (phases !== null) {
         this.latencyLabel.textContent = formatLatencyLabel(captureToDisplayMs(phases, renderAt))
+        // Debug identity: the label belongs to this rendered state.
+        this.element.dataset.latencyFrame = this.activeFrameId ?? ''
+        this.element.dataset.latencyCount = String(this.splatCount)
       }
     }
     this.frameCounter++

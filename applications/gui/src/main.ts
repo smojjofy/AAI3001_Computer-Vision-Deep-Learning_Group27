@@ -360,14 +360,11 @@ async function refreshSplat(key: string): Promise<void> {
   splatPendingKey = null
   const fetchEpoch = displayEpoch
   let receivedAt = 0
-  const requestStartedAt = performance.now()
   try {
     await runFetchWithEpoch({
-      fetch: async () => {
-        const result = await fetchSplat()
-        receivedAt = performance.now()
-        return result
-      },
+      fetch: () => fetchSplat((decodedAt) => {
+        receivedAt = decodedAt
+      }),
       startEpoch: fetchEpoch,
       currentEpoch: () => displayEpoch,
       apply: (result) => {
@@ -389,8 +386,7 @@ async function refreshSplat(key: string): Promise<void> {
           splatOutputPanel.setCaptureToDisplay({
             captureAgeMs: Number(header.capture_age_ms ?? 0),
             stateAgeMs: Number(header.state_age_ms ?? 0),
-            requestStartedAt,
-            responseAt: receivedAt,
+            decodedAt: receivedAt,
           })
           // Release the loss clock only when a state that is new for this run
           // has been installed.

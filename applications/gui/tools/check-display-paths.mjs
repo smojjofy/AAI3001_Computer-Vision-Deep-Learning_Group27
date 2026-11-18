@@ -160,16 +160,21 @@ function delay(ms, value) {
   ).length > 20)
 }
 
-// 7. Capture-to-display estimate boundaries (RT-0045 item 2).
+// 7. Capture-to-display estimate boundaries (RT-0048 item 1).
 {
-  const phases = { captureAgeMs: 40, stateAgeMs: 12, requestStartedAt: 1000, responseAt: 1030 }
-  check('all phases sum', captureToDisplayMs(phases, 1060) === 112)
-  check('transfer and render wait are separate', captureToDisplayMs(phases, 1030) === 82)
-  check('a render before the response yields no value', captureToDisplayMs(phases, 1000) === null)
-  check('a response before the request yields no value', captureToDisplayMs({ captureAgeMs: 1, stateAgeMs: 1, requestStartedAt: 2000, responseAt: 1000 }, 3000) === null)
-  check('a non-finite phase yields no value', captureToDisplayMs({ captureAgeMs: Number.NaN, stateAgeMs: 1, requestStartedAt: 1, responseAt: 2 }, 3) === null)
-  check('a negative capture age yields no value', captureToDisplayMs({ captureAgeMs: -1, stateAgeMs: 1, requestStartedAt: 1, responseAt: 2 }, 3) === null)
+  // Disjoint intervals: capture age, publish-to-response age, decoded-response
+  // to render. A browser request that starts inside the publish-response window
+  // is not part of the sum, so it cannot be counted twice.
+  const phases = { captureAgeMs: 40, stateAgeMs: 12, decodedAt: 1000 }
+  check('all phases sum', captureToDisplayMs(phases, 1005) === 57)
+  check('a zero render wait is allowed', captureToDisplayMs(phases, 1000) === 52)
+  check('a render before the decoded response yields no value', captureToDisplayMs(phases, 999) === null)
+  check('a non-finite capture age yields no value', captureToDisplayMs({ captureAgeMs: Number.NaN, stateAgeMs: 12, decodedAt: 1000 }, 1005) === null)
+  check('a negative capture age yields no value', captureToDisplayMs({ captureAgeMs: -1, stateAgeMs: 12, decodedAt: 1000 }, 1005) === null)
   check('a non-finite render time yields no value', captureToDisplayMs(phases, Number.NaN) === null)
+  // The same decoded time with a long server interval: no request interval is
+  // added, so the sum is exactly the three disjoint parts.
+  check('no request interval is added', captureToDisplayMs({ captureAgeMs: 10, stateAgeMs: 500, decodedAt: 2000 }, 2004) === 514)
   check('the missing label hides the value', formatLatencyLabel(null) === `${LATENCY_LABEL_PREFIX}: --`)
   check('the label states it is an estimate', formatLatencyLabel(82).includes('est'))
   check('the label rounds to whole milliseconds', formatLatencyLabel(82.6) === `${LATENCY_LABEL_PREFIX}: 83 ms`)

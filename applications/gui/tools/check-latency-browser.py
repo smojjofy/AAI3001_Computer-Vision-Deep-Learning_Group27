@@ -38,7 +38,16 @@ def read_state(driver) -> dict[str, str]:
     frame = driver.find_element(By.CSS_SELECTOR, ".splat-frame").text
     count = driver.find_element(By.CSS_SELECTOR, ".splat-count").text
     latency = driver.find_element(By.CSS_SELECTOR, ".splat-latency").text
-    return {"frame": frame, "count": count, "latency": latency}
+    panel = driver.find_element(By.CSS_SELECTOR, ".splat-panel")
+    return {
+        "frame": frame,
+        "count": count,
+        "latency": latency,
+        # Identity of the splat data that was ready and drawn when the label
+        # was published. Text alone does not prove the matching data was drawn.
+        "rendered_frame": panel.get_attribute("data-latency-frame") or "",
+        "rendered_count": panel.get_attribute("data-latency-count") or "",
+    }
 
 
 def main() -> int:
@@ -71,6 +80,8 @@ def main() -> int:
             failures.append("first state kept the placeholder latency label")
         if "est" not in first["latency"]:
             failures.append("first state label does not state that it is an estimate")
+        if not first["rendered_frame"] or not first["rendered_count"]:
+            failures.append("first label has no rendered splat identity")
 
         # 2 and 3. Collect later states and classify by splat count.
         # The first state is still being replaced while the panel starts, so the
@@ -81,12 +92,16 @@ def main() -> int:
         first_frame = baseline["frame"]
         first_count = baseline["count"]
         counts: set[str] = set()
+        rendered_identities: set[tuple[str, str]] = set()
         same_count_updated = False
         count_changed_updated = False
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             state = read_state(driver)
             if state["frame"] != first_frame and state["latency"] != baseline["latency"]:
+                if not state["rendered_frame"] or not state["rendered_count"]:
+                    failures.append("label published without a rendered splat identity")
+                rendered_identities.add((state["rendered_frame"], state["rendered_count"]))
                 if state["count"] == first_count:
                     same_count_updated = True
                 else:
@@ -109,6 +124,7 @@ def main() -> int:
                     "same_count_update": same_count_updated,
                     "count_change_update": count_changed_updated,
                     "counts_seen": sorted(counts),
+                    "rendered_identities": sorted(rendered_identities),
                     "observations": observations[-5:],
                     "failures": failures,
                 },
