@@ -360,6 +360,7 @@ async function refreshSplat(key: string): Promise<void> {
   splatPendingKey = null
   const fetchEpoch = displayEpoch
   let receivedAt = 0
+  const requestStartedAt = performance.now()
   try {
     await runFetchWithEpoch({
       fetch: async () => {
@@ -385,11 +386,11 @@ async function refreshSplat(key: string): Promise<void> {
           // monotonic clock), publish to response age, and every browser phase
           // from the response arriving to the renderer applying this state. The
           // panel writes the value only after the state is rendered.
-          const browserMs = receivedAt > 0 ? performance.now() - receivedAt : Number.NaN
           splatOutputPanel.setCaptureToDisplay({
             captureAgeMs: Number(header.capture_age_ms ?? 0),
             stateAgeMs: Number(header.state_age_ms ?? 0),
-            browserMs,
+            requestStartedAt,
+            responseAt: receivedAt,
           })
           // Release the loss clock only when a state that is new for this run
           // has been installed.

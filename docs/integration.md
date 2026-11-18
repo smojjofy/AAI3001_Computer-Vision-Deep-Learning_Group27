@@ -302,6 +302,28 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   Latency and count summaries both use it, and an even sample count is covered
   by tests.
 
+## Latency and run-boundary corrections (RT-0045)
+
+- **Latency publishes after the first rendered frame of the state.** The panel
+  records the phases with the new state, marks the state as pending
+  presentation in `setSplatFrame`, and writes the footer value only after the
+  first completed render of that state. This covers the first load, a same-count
+  descriptor update, and a splat-count change.
+- **Measured phases.** The estimate sums capture age at publish, server state
+  age, browser transfer and decode (request start to decoded response), and the
+  render wait (decoded response to the first render that shows the state). The
+  browser clock differs from the capture clock, so network and decode cannot be
+  separated further with the available clocks and the value stays labelled
+  `Display (est)`.
+- **Run-scoped starts.** At a run change the app now discards a pending refresh
+  job before it takes the run offsets (`RefreshDispatcher.discard_pending`).
+  An old-run pending job can no longer start inside the new run and inflate its
+  `started` cascade. `run_offsets()` reads the lifetime counts under the
+  dispatcher lock.
+- **Browser check.** `applications/gui/tools/check-latency-browser.py` drives
+  the real panel in Firefox and asserts a non-placeholder first value, a
+  same-count update, and a splat-count-change update.
+
 ## Code map
 
 - `applications/live_pipeline/adapters.py` — metric depth conversion, depth-threshold mask, transport serialization.

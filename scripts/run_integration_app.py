@@ -162,12 +162,16 @@ def main() -> None:
         generation = run_guard.advance()
         run_counters.start_run(generation)
         if dispatcher is not None:
+            # Drop an old-run pending job before the offsets are taken, so it
+            # cannot start inside the new run and inflate its cascade.
+            dispatcher.discard_pending()
+            offsets = dispatcher.run_offsets()
             run_cascade_base.update(
                 {
                     "windows": int(counters["windows"]),
-                    "submitted": int(dispatcher.submitted_total),
-                    "started": int(dispatcher.started_total),
-                    "replaced": int(dispatcher.replaced_total),
+                    "submitted": offsets["submitted"],
+                    "started": offsets["started"],
+                    "replaced": offsets["replaced"],
                     "reuse": int(counters["reuse"]),
                 }
             )

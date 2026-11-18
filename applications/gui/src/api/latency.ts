@@ -1,44 +1,70 @@
 /* Capture-to-display latency estimate for the viewer.
  *
- * The footer value must describe what the operator sees, so it is published only
- * after the renderer has applied that splat state. These helpers are pure so the
- * arithmetic and the labelling rule can be checked without a browser.
+ * The footer value describes what the operator sees, so it is published only
+ * after the renderer has drawn the splat state it belongs to. These helpers are
+ * pure so the arithmetic and the labelling rule are checked without a browser.
  *
- * Clock limits: the capture timestamp and the server age share the process
- * monotonic clock. The browser clock is separate, so browser-side phases are
- * measured inside the browser. The estimate therefore covers, end to end,
- * capture age at publish plus server state age plus the browser phases below,
- * and it is labelled as an estimate.
+ * Clock limits: capture age and server state age use the process monotonic
+ * clock on the server. The browser has a separate clock, so browser phases are
+ * measured inside the browser. The transport time from the browser request to
+ * the decoded response cannot be split into network and decode time with these
+ * clocks, so it is reported as one phase and the total is labelled an estimate.
  */
 
 export interface LatencyPhases {
-  /** Capture timestamp to server publish (shared monotonic clock). */
+  /** Capture timestamp to server publish (server monotonic clock). */
   captureAgeMs: number
-  /** Splat header state age, publish to response. */
+  /** Server publish to server response (server monotonic clock). */
   stateAgeMs: number
-  /** Response received to the renderer applying the state. */
-  browserMs: number
+  /** Browser request start time (browser clock). */
+  requestStartedAt: number
+  /** Browser time when the decoded response arrived (browser clock). */
+  responseAt: number
 }
 
-/** The footer label prefix. The value is always an estimate, never a measurement. */
+/** Browser phases measured when the render completes. */
+export interface BrowserPhases {
+  /** Request start to decoded response: network transfer plus decode. */
+  transferMs: number
+  /** Decoded response to the render that first shows the state. */
+  renderWaitMs: number
+}
+
 export const LATENCY_LABEL_PREFIX = 'Display (est)'
 
-/**
- * End-to-end capture-to-display estimate in milliseconds, or null when a phase
- * is missing or not finite.
- */
-export function captureToDisplayMs(phases: LatencyPhases | null): number | null {
-  if (phases === null) {
+/** Browser phases for a render time; null when a timestamp is missing. */
+export function browserPhases(phases: LatencyPhases, renderAt: number): BrowserPhases | null {
+  if (!Number.isFinite(phases.requestStartedAt) || !Number.isFinite(phases.responseAt)) {
     return null
   }
-  const values = [phases.captureAgeMs, phases.stateAgeMs, phases.browserMs]
+  if (!Number.isFinite(renderAt) || renderAt < phases.responseAt || phases.responseAt < phases.requestStartedAt) {
+    return null
+  }
+  return {
+    transferMs: phases.responseAt - phases.requestStartedAt,
+    renderWaitMs: renderAt - phases.responseAt,
+  }
+}
+
+/** End-to-end capture-to-display estimate in milliseconds, or null when a value is invalid. */
+export function captureToDisplayMs(phases: LatencyPhases, renderAt: number): number | null {
+  const browser = browserPhases(phases, renderAt)
+  if (browser === null) {
+    return null
+  }
+  const values = [
+    phases.captureAgeMs,
+    phases.stateAgeMs,
+    browser.transferMs,
+    browser.renderWaitMs,
+  ]
   if (!values.every((value) => Number.isFinite(value) && value >= 0)) {
     return null
   }
-  return values[0] + values[1] + values[2]
+  return values[0] + values[1] + values[2] + values[3]
 }
 
-/** Footer text for the estimate; never shows a value for a missing phase. */
+/** Footer text for the estimate; never shows a value when a phase is missing. */
 export function formatLatencyLabel(valueMs: number | null): string {
   if (valueMs === null || !Number.isFinite(valueMs)) {
     return `${LATENCY_LABEL_PREFIX}: --`

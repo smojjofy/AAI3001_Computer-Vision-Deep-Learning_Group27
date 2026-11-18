@@ -67,6 +67,29 @@ class RefreshDispatcher:
             self._condition.notify()
             return outcome
 
+    def discard_pending(self) -> int:
+        """Drop a queued job that belongs to an older capture run.
+
+        Called at a run boundary before the run counters take their offsets, so
+        an old pending job cannot start inside the new run.
+        """
+        with self._condition:
+            if self._pending is None:
+                return 0
+            self._pending = None
+            self.discarded_total += 1
+            return 1
+
+    def run_offsets(self) -> dict[str, int]:
+        """Lifetime counts, read under the lock, for run-scoped cascade offsets."""
+        with self._condition:
+            return {
+                "submitted": self.submitted_total,
+                "started": self.started_total,
+                "replaced": self.replaced_total,
+                "discarded": self.discarded_total,
+            }
+
     def snapshot(self) -> dict[str, object]:
         with self._condition:
             return {

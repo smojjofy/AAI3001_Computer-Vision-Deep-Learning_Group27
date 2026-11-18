@@ -119,7 +119,9 @@ export class SplatOutputPanel {
   private descriptorDirty = false
   private descriptorReadyAt = 0
   /** Latency phases for the newest state; published after it is rendered. */
-  private pendingLatency: { phases: LatencyPhases; applied: boolean } | null = null
+  private pendingLatency: LatencyPhases | null = null
+  /** True while a new splat state still needs its first completed render. */
+  private pendingStatePresented = false
   private warpDirty = false
 
   private intrinsics: Intrinsics = { fx: 800, fy: 800 }
@@ -243,7 +245,7 @@ export class SplatOutputPanel {
    * after the renderer has applied that state, in renderFrame().
    */
   setCaptureToDisplay(phases: LatencyPhases | null): void {
-    this.pendingLatency = phases === null ? null : { phases, applied: false }
+    this.pendingLatency = phases
     if (phases === null) {
       this.latencyLabel.textContent = formatLatencyLabel(null)
     }
@@ -340,6 +342,7 @@ export class SplatOutputPanel {
     }
     this.pendingDescriptor = descriptor
     this.basePositions = basePositions
+    this.pendingStatePresented = true
     this.activeFrameId = header.frame_id
     this.activeIdentity = {
       sourceId: String(header.source_id ?? ''),
@@ -557,6 +560,7 @@ export class SplatOutputPanel {
     this.alphaLabel.textContent = 'Alpha: 1.00'
     this.frameLabel.textContent = 'Frame: --'
     this.splatLabel.textContent = 'Splats: --'
+    this.pendingStatePresented = false
     this.setCaptureToDisplay(null)
     this.showPlaceholder(message)
     this.updateStatus()
@@ -861,9 +865,8 @@ export class SplatOutputPanel {
     if (this.disposed || this.renderer === null || this.controls === null) {
       return
     }
-    const appliedBefore = !this.descriptorDirty && !this.warpDirty
     this.applyPendingDescriptor()
-    const stateJustApplied = !appliedBefore && !this.descriptorDirty && !this.warpDirty
+    const renderAt = performance.now()
     try {
       this.controls.update()
       this.renderer.render(this.scene, this.camera)
@@ -871,12 +874,15 @@ export class SplatOutputPanel {
       this.showError(error)
       return
     }
-    if (stateJustApplied && this.pendingLatency !== null) {
-      // This render frame shows the state, so the estimate is complete.
-      this.latencyLabel.textContent = formatLatencyLabel(
-        captureToDisplayMs(this.pendingLatency.phases),
-      )
+    if (this.pendingStatePresented) {
+      // This is the first completed render that shows the state, including the
+      // new-object path and a changed splat count.
+      this.pendingStatePresented = false
+      const phases = this.pendingLatency
       this.pendingLatency = null
+      if (phases !== null) {
+        this.latencyLabel.textContent = formatLatencyLabel(captureToDisplayMs(phases, renderAt))
+      }
     }
     this.frameCounter++
     this.updateFps()

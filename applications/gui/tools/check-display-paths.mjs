@@ -160,13 +160,16 @@ function delay(ms, value) {
   ).length > 20)
 }
 
-// 7. Capture-to-display estimate boundaries (RT-0043 item 1).
+// 7. Capture-to-display estimate boundaries (RT-0045 item 2).
 {
-  check('all phases sum', captureToDisplayMs({ captureAgeMs: 40, stateAgeMs: 12, browserMs: 30 }) === 82)
-  check('a zero browser phase is allowed', captureToDisplayMs({ captureAgeMs: 40, stateAgeMs: 12, browserMs: 0 }) === 52)
-  check('a missing phase yields no value', captureToDisplayMs(null) === null)
-  check('a non-finite phase yields no value', captureToDisplayMs({ captureAgeMs: Number.NaN, stateAgeMs: 1, browserMs: 1 }) === null)
-  check('a negative phase yields no value', captureToDisplayMs({ captureAgeMs: -1, stateAgeMs: 1, browserMs: 1 }) === null)
+  const phases = { captureAgeMs: 40, stateAgeMs: 12, requestStartedAt: 1000, responseAt: 1030 }
+  check('all phases sum', captureToDisplayMs(phases, 1060) === 112)
+  check('transfer and render wait are separate', captureToDisplayMs(phases, 1030) === 82)
+  check('a render before the response yields no value', captureToDisplayMs(phases, 1000) === null)
+  check('a response before the request yields no value', captureToDisplayMs({ captureAgeMs: 1, stateAgeMs: 1, requestStartedAt: 2000, responseAt: 1000 }, 3000) === null)
+  check('a non-finite phase yields no value', captureToDisplayMs({ captureAgeMs: Number.NaN, stateAgeMs: 1, requestStartedAt: 1, responseAt: 2 }, 3) === null)
+  check('a negative capture age yields no value', captureToDisplayMs({ captureAgeMs: -1, stateAgeMs: 1, requestStartedAt: 1, responseAt: 2 }, 3) === null)
+  check('a non-finite render time yields no value', captureToDisplayMs(phases, Number.NaN) === null)
   check('the missing label hides the value', formatLatencyLabel(null) === `${LATENCY_LABEL_PREFIX}: --`)
   check('the label states it is an estimate', formatLatencyLabel(82).includes('est'))
   check('the label rounds to whole milliseconds', formatLatencyLabel(82.6) === `${LATENCY_LABEL_PREFIX}: 83 ms`)
