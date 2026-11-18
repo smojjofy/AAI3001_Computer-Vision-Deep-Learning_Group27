@@ -109,3 +109,55 @@ export function shouldDrainMask(nextKey: string | null, satisfiedKey: string | n
 export function shouldDrainPoseDepth(nextKey: string | null, renderedKey: string | null): boolean {
   return nextKey !== null && nextKey !== renderedKey
 }
+
+/**
+ * What to do with a pose-depth image for the active splat state.
+ *
+ * - ``display``: the image belongs to the active state.
+ * - ``hold``: the image is newer than the active state; keep it until the
+ *   diagnostics active frame catches up. This keeps one consistent snapshot on
+ *   screen instead of a newer depth image beside an older splat.
+ * - ``discard``: the image is older, or from another source or generation.
+ */
+export type DepthDisplayDecision = 'display' | 'hold' | 'discard'
+
+export function depthDisplayDecision(
+  depth: AuxiliaryIdentityLike | null,
+  active: ActiveIdentityLike | null,
+): DepthDisplayDecision {
+  if (depth === null || active === null) {
+    return 'discard'
+  }
+  if (depth.source_id !== active.source_id) {
+    return 'discard'
+  }
+  if (Number(depth.generation ?? 0) !== Number(active.generation)) {
+    return 'discard'
+  }
+  const depthFrame = depth.splat_frame_id ?? depth.frame_id
+  if (depthFrame === undefined || depthFrame === null) {
+    return 'discard'
+  }
+  const difference = Number(depthFrame) - Number(active.frame_id)
+  if (difference === 0) {
+    return 'display'
+  }
+  return difference > 0 ? 'hold' : 'discard'
+}
+
+/**
+ * Return the pending identity to keep after a failure.
+ *
+ * A request that failed must not replace a newer identity that arrived while it
+ * was running. Keep the current pending identity when it is different from the
+ * failed one; otherwise retry the failed identity.
+ */
+export function pendingAfterFailure(
+  currentPending: string | null,
+  failedKey: string,
+): string | null {
+  if (currentPending !== null && currentPending !== failedKey) {
+    return currentPending
+  }
+  return failedKey
+}

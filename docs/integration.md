@@ -190,6 +190,26 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   poll whose diagnostics have no active state skips its motion and pose-depth
   results. `src/api/displayGuard.ts` holds these decisions and
   `npm run check:identity` exercises the delayed-response cases.
+- **Depth holds to the splat snapshot (RT-0038).** Depth is displayed only
+  when its `splat_frame_id` equals the active diagnostics frame. A newer image
+  is held in `poseDepthAhead` and shown when the active frame catches up; an
+  older image, or one from another source or generation, is discarded. A
+  displayed depth image is cleared when diagnostics move to a new active frame,
+  and the identity is checked again when the JPEG decode completes.
+- **Fetch epoch runner (RT-0038).** `src/api/fetchRunner.ts` runs one request
+  with an epoch guard: a response or a failure that started before a clear is
+  discarded and never applied or recorded. The splat, mask, and pose-depth
+  paths use it.
+- **Newest pending identity (RT-0038).** A failed request keeps a newer pending
+  identity instead of replacing it (`pendingAfterFailure`); the `finally` drain
+  then starts the newest request.
+- **Delayed-response check (RT-0038).** `tools/check-display-paths.mjs` runs the
+  real async runner with controlled delays and checks: an old-run clear discards
+  a response and a failure, a same-run frame advance makes a decoded image old,
+  a newer image is held until the splat catches up, mixed API order never pairs
+  an old image with a new state, and a failure keeps the newest pending
+  identity. `npm run check:identity` runs it after the pure checks.
+
 - **Queued request drain (RT-0036).** Every splat, mask, and pose-depth
   completion drains the newest queued request in its `finally` block, including
   a response discarded for an old epoch. A new-run request queued behind an

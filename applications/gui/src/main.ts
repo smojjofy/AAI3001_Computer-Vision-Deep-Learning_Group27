@@ -11,8 +11,9 @@ import {
 } from './api/liveApi'
 
 import {
-  auxIsCurrentOrNewer,
   auxMatchesActive,
+  depthDisplayDecision,
+  pendingAfterFailure,
   shouldApplyAuxiliary,
   shouldApplyResponse,
   shouldClearDisplayedState,
@@ -20,6 +21,7 @@ import {
   shouldDrainPoseDepth,
   shouldDrainSplat,
 } from './api/displayGuard'
+import { runFetchWithEpoch } from './api/fetchRunner'
 import {
   isKeyAtLeast,
   needsMaskFetch,
@@ -115,6 +117,10 @@ let maskFetchInFlight = false
 let maskRetryAt = 0
 let maskRetryTimer: number | null = null
 const maskStaleAttempts = new Map<string, number>()
+/** Pose-depth frame that is newer than the active splat state, held until it matches. */
+let poseDepthAhead: PoseDepthFrame | null = null
+/** Active identity from the most recent diagnostics poll. */
+let currentActiveIdentity: ActiveStateIdentity | null = null
 /** Identity of the response whose mask is displayed. */
 let maskDisplayedKey: string | null = null
 /**
@@ -246,8 +252,9 @@ async function pollPreview(): Promise<void> {
 }
 
 function poseKey(pose: PoseDepthFrame): string {
-  const generation = Number((pose as PoseDepthFrame & { generation?: number }).generation ?? 0)
-  return splatKey(pose.source_id, generation, pose.frame_id)
+  const generation = Number(pose.generation ?? 0)
+  const frame = pose.splat_frame_id ?? pose.frame_id
+  return splatKey(pose.source_id, generation, frame)
 }
 
 function clearDisplayedState(): void {
@@ -297,6 +304,8 @@ function clearDisplayedState(): void {
   maskRetryAt = 0
   poseDepthRenderedKey = null
   poseDepthPending = null
+  poseDepthAhead = null
+  currentActiveIdentity = null
   personLossAnchorMs = null
   personLossGeneration = null
   personLossLastFrameId = 0
@@ -329,6 +338,14 @@ function drainPoseDepthPending(): void {
   }
 }
 
+function failSplat(key: string, message: string): void {
+  console.warn(message)
+  splatRetryAt = performance.now() + 500
+  // Keep a newer identity that arrived while this request ran.
+  splatPendingKey = pendingAfterFailure(splatPendingKey, key)
+  scheduleSplatRetry()
+}
+
 async function refreshSplat(key: string): Promise<void> {
   if (splatFetchInFlight) {
     splatPendingKey = key
@@ -343,45 +360,38 @@ async function refreshSplat(key: string): Promise<void> {
   splatPendingKey = null
   const fetchEpoch = displayEpoch
   try {
-    const result = await fetchSplat()
-    if (!shouldApplyResponse(fetchEpoch, displayEpoch)) {
-      // The display was cleared while this request ran. Do not restore the
-      // previous run's splat.
-      return
-    }
-    if (result.kind === 'ok') {
-      const header = result.data.header
-      const rendered = splatKey(
-        header.source_id,
-        Number(header.generation ?? 0),
-        header.frame_id,
-      )
-      splatRenderedKey = rendered
-      splatRenderedGeneration = Number(header.generation ?? 0)
-      splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
-      splatOutputPanel.setSplatFrame(result.data)
-      // Release the loss clock only when a state that is new for this run has
-      // actually been installed. Clearing it from diagnostics would let the old
-      // splats regain full alpha before the new state arrives.
-      releasePersonLossIfNewState(header)
-      if (activeMotion !== null && Number(header.frame_id) >= activeMotion.frame_id) {
-        activeMotion = null
-        splatOutputPanel.setMotionWarp(null)
-      }
-      splatRetryAt = 0
-    } else if (result.kind === 'empty') {
-      clearDisplayedState()
-    } else {
-      console.warn(`Splat fetch failed: ${result.error}`)
-      splatRetryAt = performance.now() + 500
-      splatPendingKey = key
-      scheduleSplatRetry()
-    }
-  } catch (error) {
-    console.warn(`Splat ${key} could not be rendered: ${describeError(error)}`)
-    splatRetryAt = performance.now() + 500
-    splatPendingKey = key
-    scheduleSplatRetry()
+    await runFetchWithEpoch({
+      fetch: fetchSplat,
+      startEpoch: fetchEpoch,
+      currentEpoch: () => displayEpoch,
+      apply: (result) => {
+        if (result.kind === 'ok') {
+          const header = result.data.header
+          const rendered = splatKey(
+            header.source_id,
+            Number(header.generation ?? 0),
+            header.frame_id,
+          )
+          splatRenderedKey = rendered
+          splatRenderedGeneration = Number(header.generation ?? 0)
+          splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
+          splatOutputPanel.setSplatFrame(result.data)
+          // Release the loss clock only when a state that is new for this run
+          // has been installed.
+          releasePersonLossIfNewState(header)
+          if (activeMotion !== null && Number(header.frame_id) >= activeMotion.frame_id) {
+            activeMotion = null
+            splatOutputPanel.setMotionWarp(null)
+          }
+          splatRetryAt = 0
+        } else if (result.kind === 'empty') {
+          clearDisplayedState()
+        } else {
+          failSplat(key, `Splat fetch failed: ${result.error}`)
+        }
+      },
+      onFailure: (error) => failSplat(key, `Splat ${key} could not be rendered: ${describeError(error)}`),
+    })
   } finally {
     splatFetchInFlight = false
     drainSplatPending()
@@ -403,6 +413,19 @@ function scheduleSplatRetry(): void {
   }, retryDelayMs(splatRetryAt, performance.now()))
 }
 
+function failMask(requested: string, refreshCount: number, message: string): void {
+  console.warn(message)
+  maskRetryAt = performance.now() + 500
+  const pending = pendingAfterFailure(maskPendingKey, requested)
+  if (pending === maskPendingKey && maskPendingKey !== null) {
+    // A newer identity is already queued; keep its display count.
+  } else {
+    maskPendingCount = refreshCount
+  }
+  maskPendingKey = pending
+  scheduleMaskRetry()
+}
+
 async function refreshMask(key: string, refreshCount: number): Promise<void> {
   if (maskFetchInFlight) {
     maskPendingKey = key
@@ -421,46 +444,45 @@ async function refreshMask(key: string, refreshCount: number): Promise<void> {
   maskPendingCount = null
   const fetchEpoch = displayEpoch
   try {
-    const result = await fetchMask()
-    if (!shouldApplyResponse(fetchEpoch, displayEpoch)) {
-      // A clear invalidated this mask request.
-      return
-    }
-    if (result.kind === 'ok') {
-      // The mask headers carry the identity of the state that produced the
-      // image. Never display a mask older than the requested state; retry once
-      // because a publish can land between the diagnostics and mask reads.
-      const identity = result.data.identity
-      const identityKey = identity === null
-        ? null
-        : splatKey(identity.source_id, identity.generation, identity.frame_id)
-      const acceptable = identityKey === null || identityKey === requested
-        || isKeyAtLeast(identityKey, requested)
-      if (!acceptable) {
-        const attempts = maskStaleAttempts.get(requested) ?? 0
-        if (attempts < 3) {
-          maskStaleAttempts.set(requested, attempts + 1)
-          maskPendingKey = requested
-          maskPendingCount = refreshCount
-          maskRetryAt = performance.now() + 300
-          scheduleMaskRetry()
-          return
+    await runFetchWithEpoch({
+      fetch: fetchMask,
+      startEpoch: fetchEpoch,
+      currentEpoch: () => displayEpoch,
+      apply: (result) => {
+        if (result.kind === 'ok') {
+          // The mask headers carry the identity of the state that produced the
+          // image. Never display a mask older than the requested state; retry
+          // because a publish can land between the diagnostics and mask reads.
+          const identity = result.data.identity
+          const identityKey = identity === null
+            ? null
+            : splatKey(identity.source_id, identity.generation, identity.frame_id)
+          const acceptable = identityKey === null || identityKey === requested
+            || isKeyAtLeast(identityKey, requested)
+          if (!acceptable) {
+            const attempts = maskStaleAttempts.get(requested) ?? 0
+            if (attempts < 3) {
+              maskStaleAttempts.set(requested, attempts + 1)
+              maskPendingKey = requested
+              maskPendingCount = refreshCount
+              maskRetryAt = performance.now() + 300
+              scheduleMaskRetry()
+              return
+            }
+            console.warn(`Mask identity ${identityKey} is older than ${requested}; accepting after 3 tries`)
+          }
+          const settled = settleMaskIdentity(requested, identityKey)
+          maskDisplayedKey = settled.displayedKey
+          maskSatisfiedKey = settled.satisfiedKey
+          maskStaleAttempts.clear()
+          frameProcessorPanel.setMaskImage(result.data.bitmap, { refreshCount })
+          maskRetryAt = 0
+        } else {
+          failMask(requested, refreshCount, 'Mask fetch returned no image')
         }
-        console.warn(`Mask identity ${identityKey} is older than ${requested}; accepting after 3 tries`)
-      }
-      const settled = settleMaskIdentity(requested, identityKey)
-      maskDisplayedKey = settled.displayedKey
-      maskSatisfiedKey = settled.satisfiedKey
-      maskStaleAttempts.clear()
-      frameProcessorPanel.setMaskImage(result.data.bitmap, { refreshCount })
-      maskRetryAt = 0
-    } else {
-      frameProcessorPanel.setMaskImage(null, null)
-      maskRetryAt = performance.now() + 500
-      maskPendingKey = requested
-      maskPendingCount = refreshCount
-      scheduleMaskRetry()
-    }
+      },
+      onFailure: (error) => failMask(requested, refreshCount, `Mask ${requested} could not be fetched: ${describeError(error)}`),
+    })
   } finally {
     maskFetchInFlight = false
     drainMaskPending()
@@ -483,6 +505,19 @@ function scheduleMaskRetry(): void {
   }, retryDelayMs(maskRetryAt, performance.now()))
 }
 
+function failPoseDepth(poseDepth: PoseDepthFrame, message: string): void {
+  if (depthDisplayDecision(poseDepth, currentActiveIdentity) !== 'display') {
+    // The active state moved while this frame decoded; do not show or retry an
+    // image that no longer belongs to it.
+    return
+  }
+  console.warn(message)
+  frameProcessorPanel.setDepthFrame(null, poseDepth)
+  poseDepthRetryAt = performance.now() + 500
+  poseDepthPending = poseDepth
+  schedulePoseDepthRetry()
+}
+
 async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
   if (poseDepthFetchInFlight) {
     poseDepthPending = poseDepth
@@ -497,25 +532,26 @@ async function refreshPoseDepth(poseDepth: PoseDepthFrame): Promise<void> {
   poseDepthPending = null
   const fetchEpoch = displayEpoch
   try {
-    const image = await decodeJpegBase64(poseDepth.depth_jpeg_base64)
-    if (shouldApplyResponse(fetchEpoch, displayEpoch)) {
-      poseDepthRenderedKey = poseKey(poseDepth)
-      frameProcessorPanel.setDepthFrame(image, poseDepth)
-      poseDepthRetryAt = 0
-    }
-    // A discarded frame renders nothing; the finally drain still starts a
-    // newer queued request below.
-  } catch {
-    if (shouldApplyResponse(fetchEpoch, displayEpoch)) {
-      frameProcessorPanel.setDepthFrame(null, poseDepth)
-      poseDepthRetryAt = performance.now() + 500
-      poseDepthPending = poseDepth
-      schedulePoseDepthRetry()
-    }
+    await runFetchWithEpoch({
+      fetch: () => decodeJpegBase64(poseDepth.depth_jpeg_base64),
+      startEpoch: fetchEpoch,
+      currentEpoch: () => displayEpoch,
+      apply: (image) => {
+        const decision = depthDisplayDecision(poseDepth, currentActiveIdentity)
+        if (decision === 'display') {
+          poseDepthRenderedKey = poseKey(poseDepth)
+          frameProcessorPanel.setDepthFrame(image, poseDepth)
+          poseDepthRetryAt = 0
+        } else if (decision === 'hold') {
+          // Newer than the displayed splat: hold until the splat catches up.
+          poseDepthAhead = poseDepth
+        }
+      },
+      onFailure: () => failPoseDepth(poseDepth, `Pose depth ${poseKey(poseDepth)} could not be decoded`),
+    })
   } finally {
     poseDepthFetchInFlight = false
-    // Always drain the newest request: a new-run request queued behind an old
-    // in-flight decode must start even when the old response was discarded.
+    // Always drain the newest request, including after a discarded response.
     drainPoseDepthPending()
   }
 }
@@ -606,6 +642,7 @@ async function pollState(): Promise<void> {
 
     const splatFrameId = diagnostics.splat?.frame_id ?? null
     activeIdentity = diagnostics.active_identity ?? null
+    currentActiveIdentity = activeIdentity
     if (splatFrameId !== null && activeIdentity !== null) {
       const key = splatKey(
         activeIdentity.source_id,
@@ -654,6 +691,7 @@ async function pollState(): Promise<void> {
     inferencePanel.update(null)
     pipelineHealth =
       diagnosticsResult.kind === 'error' ? 'disconnected' : 'waiting'
+    currentActiveIdentity = null
     // A poll without diagnostics cannot prove the run is still the same.
     applyStatus()
     window.setTimeout(() => {
@@ -682,19 +720,45 @@ async function pollState(): Promise<void> {
     splatOutputPanel.setMotionWarp(null)
   }
 
+  // Depth uses one consistent snapshot: display only an image that matches the
+  // active splat state, hold a newer image until the active frame catches up,
+  // and discard an older one.
+  const activeKey = activeIdentity === null
+    ? null
+    : splatKey(activeIdentity.source_id, activeIdentity.generation, activeIdentity.frame_id)
+  if (activeKey !== null && poseDepthRenderedKey !== null && poseDepthRenderedKey !== activeKey) {
+    // Diagnostics moved to a new active frame: the old depth image must go.
+    poseDepthRenderedKey = null
+    frameProcessorPanel.setDepthFrame(null, null)
+  }
+  if (poseDepthAhead !== null) {
+    const aheadDecision = depthDisplayDecision(poseDepthAhead, activeIdentity)
+    if (aheadDecision === 'display') {
+      const frame = poseDepthAhead
+      poseDepthAhead = null
+      void refreshPoseDepth(frame)
+    } else if (aheadDecision === 'discard') {
+      poseDepthAhead = null
+    }
+  }
   if (poseDepthResult.kind === 'ok') {
     const poseDepth = poseDepthResult.data
-    if (auxIsCurrentOrNewer(poseDepth, activeIdentity)) {
+    const decision = depthDisplayDecision(poseDepth, activeIdentity)
+    if (decision === 'display') {
       const key = poseKey(poseDepth)
       const pendingKey = poseDepthPending === null ? null : poseKey(poseDepthPending)
       if (key !== poseDepthRenderedKey && key !== pendingKey) {
         void refreshPoseDepth(poseDepth)
       }
-    } else if (poseDepthRenderedKey !== null) {
-      // Old-run depth must not stay under the new state.
-      poseDepthRenderedKey = null
-      poseDepthPending = null
-      frameProcessorPanel.setDepthFrame(null, null)
+    } else if (decision === 'hold') {
+      // Keep only the newest held frame.
+      const aheadFrame = poseDepthAhead === null
+        ? -1
+        : Number(poseDepthAhead.splat_frame_id ?? poseDepthAhead.frame_id)
+      const frame = Number(poseDepth.splat_frame_id ?? poseDepth.frame_id)
+      if (frame >= aheadFrame) {
+        poseDepthAhead = poseDepth
+      }
     }
   } else if (poseDepthResult.kind === 'empty' && poseDepthRenderedKey !== null) {
     poseDepthRenderedKey = null
