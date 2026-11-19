@@ -98,3 +98,27 @@ def test_submit_after_discard_is_accepted_for_the_new_run() -> None:
     finally:
         worker.release.set()
         dispatcher.close(drain=True)
+
+
+def test_close_without_drain_does_not_wait_for_a_running_job() -> None:
+    # A shutdown must not hang on in-flight model work. drain=False drops the
+    # pending job and returns even while the worker is busy.
+    worker = BlockingWorker()
+    dispatcher = RefreshDispatcher(worker)
+    try:
+        dispatcher.submit(job(1))
+        assert worker.first_started.wait(2)
+        dispatcher.submit(job(2))
+        started = time.monotonic()
+        try:
+            dispatcher.close(drain=False, timeout_s=1.0)
+        except TimeoutError:
+            # The worker thread is still inside the blocking callback; that is
+            # expected, and the caller handles it. The check is that close did
+            # not wait for the full drain path.
+            pass
+        elapsed = time.monotonic() - started
+        assert elapsed < 5.0
+        assert dispatcher.discarded_total == 1
+    finally:
+        worker.release.set()

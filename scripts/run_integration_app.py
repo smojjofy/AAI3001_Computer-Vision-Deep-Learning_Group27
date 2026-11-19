@@ -510,7 +510,13 @@ def main() -> None:
         elapsed = time.monotonic() - started
         handler.stop()
         flush_window()
-        dispatcher.close(drain=True)
+        # Shutdown must not wait for in-flight model work. A slow refresh would
+        # otherwise hang the process for the full dispatcher timeout, which is
+        # what a finite video source shows when it reaches its end.
+        try:
+            dispatcher.close(drain=False, timeout_s=2.0)
+        except TimeoutError:
+            print("warning: refresh worker did not stop in time; exiting anyway", flush=True)
         server.shutdown()
         server.server_close()
         pipeline.close()
