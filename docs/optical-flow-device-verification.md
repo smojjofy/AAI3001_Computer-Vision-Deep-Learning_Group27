@@ -8,24 +8,18 @@ is ignored by Git. Keep recordings in `data/recordings/`, also ignored by Git.
 
 ## 1. Prepare the environment on each device
 
-If `.venv` does not exist on that device, create it with Python 3.11 or newer:
+Use the repeatable setup script on each Windows device. It creates `.venv`,
+installs the Stream Handler, Optical Flow, and Reranker, then selects a matching
+NVIDIA or CPU PyTorch wheel for RAFT Small:
 
 ```powershell
-py -3 -m venv .venv
+& .\scripts\setup_device.ps1 -WithRaft
 ```
 
-Install the two local modules using the virtual environment's Python:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e .\modules\stream_handler
-.\.venv\Scripts\python.exe -m pip install -e .\modules\inference\optical_flow
-```
-
-For **RAFT Small**, install a matching PyTorch + Torchvision build. On an NVIDIA
-device, choose Windows, Pip, and the device's supported CUDA option in the
-[official PyTorch installer](https://pytorch.org/get-started/locally/). Run its
-command through `.\.venv\Scripts\python.exe -m pip ...` so packages land in this
-environment. On a CPU-only device, choose the CPU build. Check availability:
+The script does not select AMD GPU acceleration. On other operating systems,
+install the local modules and a supported PyTorch/Torchvision build in a local
+environment using the [official PyTorch installer](https://pytorch.org/get-started/locally/).
+Check the active device and imports:
 
 ```powershell
 .\.venv\Scripts\python.exe -c "import cv2; print('OpenCV', cv2.__version__, 'DIS', hasattr(cv2, 'DISOpticalFlow_create'))"
@@ -40,12 +34,16 @@ requirements](https://docs.pytorch.org/vision/stable/models/generated/torchvisio
 
 ## 2. Check a physical camera or OBS Virtual Camera
 
-Start with DIS. Replace device index `0` if the camera appears at a different
-index. For OBS, start its Virtual Camera first and use `--source obs`.
+Start with RAFT Small for the planned demo and use DIS as the CPU baseline.
+Replace device index `0` if the camera appears at a different index. For OBS,
+start its Virtual Camera first and use `--source obs`. Close OBS when opening
+its physical webcam directly. This standalone flow command uses the camera's
+default OpenCV backend. For a DirectShow live check, use the README's
+`run_live_scheduler.py` command with `--camera-backend dshow`.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_optical_flow.py --source camera --device 0 --duration-s 20 --config config\optical_flow.example.json
-.\.venv\Scripts\python.exe scripts\run_optical_flow.py --source obs --device 0 --duration-s 20 --config config\optical_flow.example.json
+.\.venv\Scripts\python.exe scripts\run_optical_flow.py --source camera --device 0 --duration-s 20 --config config\optical_flow_raft.example.json
+.\.venv\Scripts\python.exe scripts\run_optical_flow.py --source obs --device 0 --duration-s 20 --config config\optical_flow_raft.example.json
 ```
 
 For an IP camera, use `--source rtsp --url '<your RTSP address>'`. The command
@@ -65,10 +63,10 @@ Check the output in order:
    hidden by a mostly static background in this median; use the preview below
    to inspect local motion.
 
-Run the same live check with RAFT Small:
+Run the same live check with the DIS baseline:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_optical_flow.py --source camera --device 0 --duration-s 20 --config config\optical_flow_raft.example.json
+.\.venv\Scripts\python.exe scripts\run_optical_flow.py --source camera --device 0 --duration-s 20 --config config\optical_flow.example.json
 ```
 
 For a quieter throughput check, add `--summary-only`. Its final JSON reports
@@ -151,11 +149,19 @@ $raft4Config | ConvertTo-Json | Set-Content 'outputs\optical_flow_raft4.json'
 Fewer updates may be faster, but compare visual alignment as well as timing.
 Do not change resolution, crop, frame count, or hardware between model runs.
 
-| Device / footage | Backend and settings | Isolated p50 / p95 ms | Paced queue drops / emitted | Visual notes |
-| --- | --- | --- | --- | --- |
-|  | DIS fast, 320×180 max |  |  |  |
-|  | RAFT Small, 12 updates |  |  |  |
-|  | RAFT Small, 4 updates |  |  |  |
+The team's earlier 300-frame `flow_eval.mp4` run measured 289 pairs after 10
+warmup pairs. These are isolated flow timings from one development machine;
+the raw clip and preview images are local and ignored by Git:
+
+| Footage | Backend and settings | Isolated p50 / p95 | Mean valid fraction | Visual note |
+| --- | --- | ---: | ---: | --- |
+| `flow_eval.mp4`, 300 frames | DIS fast, 320×180 max | 83.051 / 89.161 ms | 0.969 | Faster baseline. |
+| Same clip | RAFT Small, 12 updates, 320×180 max | 200.564 / 230.591 ms | 0.911 | Subject motion appeared clearer in inspected previews, including frame 250. |
+
+Paced-replay queue drop counts were not preserved with this isolated benchmark.
+The valid fraction is a forward/backward consistency measure, not labelled
+accuracy. Repeat the two commands above on the presentation hardware with
+depth and the viewer active before treating these latencies as live capacity.
 
 ## 6. Decide what the measurements establish
 

@@ -1,6 +1,6 @@
 # Single-Camera Visual Reconstruction Workflow
 
-This document describes the reconciled MVP and its extension path. The base system uses one static camera and learned visual signals. Skeletal animation, online optimization, and richer metadata are optional extensions rather than prerequisites for the first working demo.
+This document describes the intended MVP and its extension path. The base system uses one static camera and learned visual signals. Skeletal animation, online optimization, and richer metadata are optional extensions rather than prerequisites for the first working demo.
 
 ## Base streaming pipeline
 
@@ -10,7 +10,7 @@ flowchart TD
     STREAM[Stream Handler<br/>decode, timestamp, reconnect]
     PACKET[RGB8 FramePacket<br/>identity, timestamp, quality]
     FLOW[Optical flow<br/>retained reference to current FramePacket]
-    SELECT[Reranker<br/>bounded selection window]
+    SELECT[Reranker<br/>one retained significant frame]
     DISPATCH[Frame Processor<br/>execute reuse or refresh]
     PRE[Frame Processor<br/>prepare selected refresh frame]
     SEG[Foreground segmentation<br/>mask + confidence]
@@ -81,7 +81,7 @@ The first implementation should include:
 - Foreground segmentation.
 - Monocular relative-depth estimation.
 - Optical flow for temporal correspondence.
-- Reranking with a bounded selection window and an optional periodic refresh fallback.
+- Reranking against one retained significant frame with capture-time reference expiry.
 - A Frame Processor decision/dispatch step: reuse a valid cache state or prepare a refresh frame.
 - Depth-guided Gaussian initialization for keyframes.
 - Merge, deduplication, confidence tracking, and pruning.
@@ -116,16 +116,6 @@ ConstructionFrame {
 When skeletal data is present, the Splat Constructor can add per-Gaussian binding and pose-aware deformation. This enables an animatable asset without changing the base RGB, mask, depth, and flow pipeline.
 
 The replay buffer and background optimizer are quality extensions. They should refine persistent Gaussian state asynchronously and must not block the fast rendering path.
-
-## Module ownership
-
-The five-person work split maps to the diagram as follows:
-
-- Teammate 1: Stream Handler and Frame Processor.
-- Teammate 2: Foreground Segmentation.
-- Teammate 3: Depth and Optical Flow.
-- Teammate 4: Temporal Cache and Three.js Viewer.
-- Project lead: Splat Constructor, shared integration, and evaluation.
 
 ## Future multi-camera extension
 

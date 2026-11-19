@@ -8,21 +8,23 @@ boolean `[height, width]` validity mask. Its serialisation-safe envelope is
 For a valid pixel `(x, y)` in the **previous** frame, `flow[y, x] = (dx, dy)`
 points to `(x + dx, y + dy)` in the current frame. Positive x is right;
 positive y is down. Values use pixels at the reported output width and height,
-even when DIS ran on smaller images. Pixels outside the current image or failing
+even when an estimator ran on smaller images. Pixels outside the current image or failing
 forward/backward consistency are invalid. A valid mask means useful temporal
 correspondence, not a calibrated probability or fresh depth estimate.
 
 Both frames must have the same source, dimensions, and image coordinate system.
-The intended live input is consecutive *available* RGB8 `FramePacket`s from the
-Stream Handler; the Frame Processor is not on this optical-flow path. Callers
-must not mix undistorted and raw images. IDs may skip, but must
-increase; timestamps must increase within the same timestamp origin. A source
-change starts a new tracker pair. `no_previous_frame`, `invalid_timestamps`, and
+The standalone flow diagnostic compares consecutive *available* RGB8
+`FramePacket`s. In the live reranker path, `StreamRerankerConsumer` instead
+compares the retained significant frame with the selected current packet. The
+Frame Processor is not on either optical-flow input path. Callers must not mix
+undistorted and raw images. IDs may skip, but must increase; timestamps must
+increase within the same timestamp origin. A source change starts a new
+comparison sequence. `no_previous_frame`, `invalid_timestamps`, and
 `scene_cut` return zero flow with an all-false mask so the scheduler can request
 fresh estimation rather than reuse stale geometry. `elapsed_ns` records actual
 time between the compared frames and is **not** inferred from frame IDs.
 
-The reranker consumes the frame/flow observation and compares each new frame
+The reranker consumes reference-to-current flow and compares each new frame
 with its own one-entry record of the last significant camera frame. A
 significant difference replaces that record and yields `refresh`; otherwise it
 yields `reuse`. The Frame Processor executes that decision. The Temporal Cache
@@ -41,7 +43,7 @@ for the validity check. PyTorch, Torchvision, and weights are optional and are
 loaded only when RAFT Small is selected.
 
 `StreamFlowConsumer.poll()` drains the existing Stream Handler queue and returns
-`FlowObservation(packet, flow, processing_time_ns)` for the future reranker. It
+`FlowObservation(packet, flow, processing_time_ns)` for callers. It
 pairs the current packet with the last packet **actually dequeued**, so skipped
 frame IDs caused by the bounded queue are preserved and handled. Run
 `scripts/run_optical_flow.py --source video --path path/to/video.mp4` for a
