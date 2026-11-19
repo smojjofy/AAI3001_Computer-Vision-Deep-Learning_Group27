@@ -64,9 +64,16 @@ def build_source(args):
         if args.path is None or not args.path.is_file():
             raise SystemExit("--source video requires an existing --path")
         return RecordedVideoSource(args.path, replay_mode=ReplayMode.PACED)
+    capture_size = None
+    if args.capture_width > 0 and args.capture_height > 0:
+        capture_size = (args.capture_width, args.capture_height)
+    elif args.capture_width > 0 or args.capture_height > 0:
+        raise SystemExit("--capture-width and --capture-height must be given together")
     if args.source == "obs":
-        return OBSVirtualCameraSource(args.device, backend=args.camera_backend)
-    return CameraSource(args.device, backend=args.camera_backend)
+        return OBSVirtualCameraSource(
+            args.device, backend=args.camera_backend, capture_size=capture_size
+        )
+    return CameraSource(args.device, backend=args.camera_backend, capture_size=capture_size)
 
 
 def main() -> None:
@@ -82,6 +89,24 @@ def main() -> None:
     parser.add_argument("--queue-capacity", type=int, default=3)
     parser.add_argument("--sample-stride", type=int, default=2, help="Constructor pixel stride")
     parser.add_argument("--horizontal-fov-deg", type=float, default=60.0)
+    parser.add_argument(
+        "--capture-width",
+        type=int,
+        default=0,
+        help="Requested camera capture width. 0 keeps the device default (640 for this camera)",
+    )
+    parser.add_argument(
+        "--capture-height",
+        type=int,
+        default=0,
+        help="Requested camera capture height. 0 keeps the device default (480 for this camera)",
+    )
+    parser.add_argument(
+        "--yolo-imgsz",
+        type=int,
+        default=640,
+        help="YOLO depth input size. 640 matches the default; larger is slower",
+    )
     parser.add_argument(
         "--camera-config",
         type=Path,
@@ -126,6 +151,7 @@ def main() -> None:
         ),
         sample_stride=args.sample_stride,
         horizontal_fov_deg=args.horizontal_fov_deg,
+        yolo_imgsz=args.yolo_imgsz,
         camera_config=camera_config,
         yolo_model=args.yolo_model,
         device=args.device_inference,

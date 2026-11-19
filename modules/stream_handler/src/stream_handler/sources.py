@@ -105,14 +105,22 @@ class OpenCVFrameSource:
         finite: bool = False,
         replay_mode: ReplayMode = ReplayMode.FASTEST,
         camera_backend: str = "auto",
+        capture_size: tuple[int, int] | None = None,
     ) -> None:
         if camera_backend not in {"auto", "dshow", "msmf"}:
             raise ValueError("camera_backend must be auto, dshow, or msmf")
+        if capture_size is not None:
+            width, height = capture_size
+            if type(width) is not int or type(height) is not int or width < 1 or height < 1:
+                raise ValueError("capture_size must be (width, height) positive integers, or None")
+            capture_size = (int(width), int(height))
         self.location = location
         self.source_id = source_id
         self.finite = finite
         self.replay_mode = replay_mode
         self.camera_backend = camera_backend
+        # None keeps the device's own default, so existing callers are unchanged.
+        self.capture_size = capture_size
         self._capture = None
         self._capture_lock = threading.Lock()
         self._closed_event = threading.Event()
@@ -130,6 +138,11 @@ class OpenCVFrameSource:
             "msmf": cv2.CAP_MSMF,
         }[self.camera_backend]
         capture = cv2.VideoCapture(self.location, backend)
+        if self.capture_size is not None:
+            # Requested before the first read; the driver may return its closest
+            # supported size, so the delivered frame size stays authoritative.
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.capture_size[0])
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.capture_size[1])
         if not capture.isOpened():
             capture.release()
             raise SourceReadError(f"could not open source: {self.location}")
@@ -190,15 +203,38 @@ class OpenCVFrameSource:
 
 
 class CameraSource(OpenCVFrameSource):
-    def __init__(self, device_index: int = 0, source_id: str | None = None, *, backend: str = "auto") -> None:
-        super().__init__(device_index, source_id or f"camera:{device_index}", camera_backend=backend)
+    def __init__(
+        self,
+        device_index: int = 0,
+        source_id: str | None = None,
+        *,
+        backend: str = "auto",
+        capture_size: tuple[int, int] | None = None,
+    ) -> None:
+        super().__init__(
+            device_index,
+            source_id or f"camera:{device_index}",
+            camera_backend=backend,
+            capture_size=capture_size,
+        )
 
 
 class OBSVirtualCameraSource(CameraSource):
     """OBS Virtual Camera is an ordinary OS camera device; pass its device index."""
 
-    def __init__(self, device_index: int = 0, *, backend: str = "auto") -> None:
-        super().__init__(device_index, "obs-virtual-camera", backend=backend)
+    def __init__(
+        self,
+        device_index: int = 0,
+        *,
+        backend: str = "auto",
+        capture_size: tuple[int, int] | None = None,
+    ) -> None:
+        super().__init__(
+            device_index,
+            "obs-virtual-camera",
+            backend=backend,
+            capture_size=capture_size,
+        )
 
 
 class RecordedVideoSource(OpenCVFrameSource):
