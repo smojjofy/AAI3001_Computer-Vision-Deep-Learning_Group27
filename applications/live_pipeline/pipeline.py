@@ -109,6 +109,7 @@ class RefreshPipeline:
     yolo_imgsz: int = 640
     device: str = "auto"
     require_pose: bool = True
+    depth_confidence: bool = False
     generation: int = 0
     _pipeline: Any = field(default=None, init=False, repr=False)
     _intrinsics: tuple[float, float, float, float] | None = field(default=None, init=False, repr=False)
@@ -122,7 +123,13 @@ class RefreshPipeline:
     def _ensure_pipeline(self):
         if self._pipeline is None:
             CameraIntrinsics, PoseDepthPipeline, _ = _import_depth_stack()
-            kwargs: dict[str, Any] = {"device": self.device, "imgsz": self.yolo_imgsz}
+            kwargs: dict[str, Any] = {
+                "device": self.device,
+                "imgsz": self.yolo_imgsz,
+                # The live mask path reads depth and validity only. The per-pixel
+                # edge-confidence plane costs milliseconds and is unused here.
+                "compute_confidence": self.depth_confidence,
+            }
             if self.yolo_model is not None:
                 kwargs["yolo_model"] = self.yolo_model
             self._pipeline = PoseDepthPipeline(**kwargs)

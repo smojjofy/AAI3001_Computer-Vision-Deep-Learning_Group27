@@ -61,6 +61,7 @@ def normalize_prediction(
     model_name: str = "",
     max_depth: float | None = None,
     valid_range: tuple[float, float] | None = None,
+    compute_confidence: bool = True,
 ) -> DepthEstimation:
     """Raw model output [H, W] -> DepthEstimation in the shared convention.
 
@@ -114,7 +115,14 @@ def normalize_prediction(
         valid &= (depth >= near) & (depth <= far)
 
     depth = np.where(valid, depth, np.nan).astype(np.float32)
-    confidence = edge_confidence(depth, valid)
+    # ``compute_confidence=False`` skips the per-pixel edge heuristic, which costs
+    # several milliseconds on a full-size frame. A caller that never reads
+    # ``confidence`` can skip it and receive a zero plane of the right shape.
+    confidence = (
+        edge_confidence(depth, valid)
+        if compute_confidence
+        else np.zeros(depth.shape, dtype=np.float32)
+    )
 
     return DepthEstimation(
         depth=depth,

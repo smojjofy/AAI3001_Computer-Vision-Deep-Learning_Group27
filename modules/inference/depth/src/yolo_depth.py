@@ -20,6 +20,7 @@ class YoloDepthEstimator:
         output_size: tuple[int, int] | None = None,
         half_precision: bool = True,
         valid_range: tuple[float, float] | None = None,
+        compute_confidence: bool = True,
     ) -> None:
         try:
             from ultralytics import YOLO
@@ -50,6 +51,7 @@ class YoloDepthEstimator:
         self.imgsz = imgsz
         self.output_size = output_size
         self.valid_range = valid_range
+        self.compute_confidence = bool(compute_confidence)
         self.kind = "metric_depth"
         self.half = bool(half_precision and self.device.startswith("cuda"))
 
@@ -103,6 +105,7 @@ class YoloDepthEstimator:
             kind="metric_depth",
             model_name=self.model_name,
             valid_range=self.valid_range,
+            compute_confidence=self.compute_confidence,
         )
 
     def estimate_frame(

@@ -170,6 +170,7 @@ class PoseDepthPipeline:
         intrinsics: CameraIntrinsics | None = None,
         joint_radius: int = 2,
         min_visibility: float = 0.5,
+        compute_confidence: bool = True,
         pose_estimator=None,
         depth_estimator=None,
     ) -> None:
@@ -181,6 +182,10 @@ class PoseDepthPipeline:
         intrinsics               camera fx, fy, cx, cy -> also returns 3D joint positions
         joint_radius             window (2*r+1 px square) used to read each joint's depth
         min_visibility           joints MediaPipe is less sure about than this get NaN depth
+        compute_confidence       compute the per-pixel depth edge-confidence plane. The
+                                 live mask path reads depth and validity only, and the
+                                 plane costs several milliseconds per frame; set False
+                                 when nothing consumes ``DepthEstimation.confidence``
         pose_estimator / depth_estimator   pass ready-made objects instead (tests, sharing)
         """
         self.pose_model = Path(pose_model)
@@ -191,6 +196,7 @@ class PoseDepthPipeline:
         self.intrinsics = intrinsics
         self.joint_radius = joint_radius
         self.min_visibility = min_visibility
+        self.compute_confidence = bool(compute_confidence)
 
         if pose_estimator is None:
             PoseEstimator = _import_pose_estimator()
@@ -203,7 +209,12 @@ class PoseDepthPipeline:
         """The YOLO depth estimator, loaded on first use."""
         if self._depth is None:
             from .yolo_depth import YoloDepthEstimator
-            self._depth = YoloDepthEstimator(self.yolo_model, device=self.device, imgsz=self.imgsz)
+            self._depth = YoloDepthEstimator(
+                self.yolo_model,
+                device=self.device,
+                imgsz=self.imgsz,
+                compute_confidence=self.compute_confidence,
+            )
         return self._depth
 
     def process_frame(

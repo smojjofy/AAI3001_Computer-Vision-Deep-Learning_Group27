@@ -44,7 +44,28 @@ import type {
 } from './api/types'
 
 const PREVIEW_POLL_MS = 100
-const STATE_POLL_MS = 300
+/**
+ * State poll period. The default is 300 ms. `?poll=100` in the URL overrides it
+ * so the same build can be compared at another cadence without a rebuild.
+ */
+const DEFAULT_STATE_POLL_MS = 300
+const STATE_POLL_MS = readPollOverride() ?? DEFAULT_STATE_POLL_MS
+
+function readPollOverride(): number | null {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('poll')
+    if (raw === null) {
+      return null
+    }
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value < 50 || value > 2000) {
+      return null
+    }
+    return Math.round(value)
+  } catch {
+    return null
+  }
+}
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
