@@ -14,17 +14,20 @@ import sys
 import numpy as np
 import pytest
 
-# `_import_pose_estimator` appends the pose package to sys.path on first use. If
-# another suite imported it earlier from a different path, a cached half-built
-# package can remain and the model import fails with ModuleNotFoundError. Drop
-# any cached pose modules before importing the live pipeline so this test owns
-# the import.
+ROOT = Path(__file__).resolve().parents[3]
+
+# The pose package is a sibling module that another suite may already have put on
+# sys.path. Put the real source folder at the front so this test loads the same
+# module the live pipeline loads, regardless of what ran before it.
+_POSE_SRC = str(ROOT / "modules" / "inference" / "pose" / "src")
+if _POSE_SRC in sys.path:
+    sys.path.remove(_POSE_SRC)
+sys.path.insert(0, _POSE_SRC)
 for _name in [name for name in list(sys.modules) if name == "pose_estimator" or name.startswith("pose_estimator.")]:
     del sys.modules[_name]
 
 from applications.live_pipeline.pipeline import RefreshError, RefreshPipeline
 
-ROOT = Path(__file__).resolve().parents[3]
 DEPTH_MODELS = ROOT / "modules" / "inference" / "depth" / "models"
 
 requires_models = pytest.mark.skipif(

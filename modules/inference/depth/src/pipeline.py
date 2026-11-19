@@ -149,11 +149,17 @@ def joints_to_xyz(result: PoseDepthFrameResult, intrinsics: CameraIntrinsics) ->
 
 
 def _import_pose_estimator():
-    try:
-        from pose_estimator import PoseEstimator
-    except ImportError:
-        sys.path.insert(0, str(POSE_ROOT / "src"))      # teammate's module, not pip-installed
-        from pose_estimator import PoseEstimator
+    """Import the pose package from its source folder.
+
+    The pose package is a sibling module, not a pip dependency, so its source
+    folder must be on sys.path. Adding it unconditionally (rather than only
+    after a failed import) keeps the import deterministic when another package
+    already put a different path on sys.path.
+    """
+    pose_src = str(POSE_ROOT / "src")
+    if pose_src not in sys.path:
+        sys.path.insert(0, pose_src)
+    from pose_estimator import PoseEstimator
     return PoseEstimator
 
 
