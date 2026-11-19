@@ -12,7 +12,8 @@ used by splat construction, the image-space motion used by splat reuse, or both.
 It must run on this computer during a live stream. Run it in shadow mode first.
 Do not change the default demonstration result.
 
-The current path uses a depth-threshold mask on refresh and OpenCV DIS optical
+The current path uses a pose-seeded depth-gradient mask on refresh, with a
+depth-band fallback when the gradient mask fails. It uses OpenCV DIS optical
 flow on reuse. `RefreshPipeline` owns pose, depth, mask, and construction.
 `MotionPreview` sends a 40 x 30 flow field to the browser. The browser moves
 displayed splats in the source view. It does not change their stored three-
@@ -56,7 +57,8 @@ Build one aligned input from the retained refresh frame and one selected frame.
 Use matching red-green-blue (RGB) images, DIS flow, current and reference depth
 maps, depth-validity maps, and current and reference pose maps. Generate pose
 maps from joint positions and visible limb lines in image coordinates. Supply
-the current depth-threshold mask as an input. Each depth and pose estimate must
+the current accepted pose-gradient mask (or its recorded depth-band fallback)
+as an input. Each depth and pose estimate must
 belong to its RGB frame. Do not use the cached pose or depth as a substitute
 for the selected frame's estimate. The retained reference can use the pose and
 depth saved with its successful refresh.
@@ -67,7 +69,8 @@ Scale horizontal and vertical flow vectors with the corresponding image axes.
 Use this 15-channel input order: reference RGB (3), current RGB (3), reference
 depth (1), current depth (1), reference depth validity (1), current depth
 validity (1), DIS horizontal and vertical flow (2), reference pose map (1),
-current pose map (1), and current depth-threshold mask (1). Scale finite depth
+current pose map (1), and current accepted baseline mask (1). Record its
+`mask_source` as `pose_gradient` or `depth_threshold_fallback`. Scale finite depth
 in metres to `[0, 1]` by clipping it to `[0, 10]` and dividing by 10. Set an
 invalid model depth value to zero and mark it in the separate validity map.
 Divide each flow component by its image width or height. Do not change the
@@ -82,13 +85,15 @@ residual to DIS flow, applies the existing validity and maximum-offset rules,
 and then uses `build_motion_preview` to produce the existing browser payload.
 The model must not change `MotionPreview` wire fields or stored splat positions.
 
-For a refresh, create both masks after fresh pose and depth are ready. Keep the
-depth-threshold mask as the comparison. A model mask may be used only when it
+For a refresh, create the accepted baseline mask and the model mask after fresh
+pose and depth are ready. Compare the model with the pose-gradient result and
+the existing pose-keypoint-hull baseline on the same held-out frames. Keep the
+depth-band mask as a recorded fallback. A model mask may be used only when it
 has finite values, the correct dimensions, a valid connected person region,
 and an allowed area. Intersect it with valid-depth pixels before construction.
 Keep the current pose requirement. A valid model mask may rescue a failed
-depth-threshold mask, but it cannot rescue missing pose or depth. If the model
-mask fails validation, use the depth-threshold mask and its existing failure
+  baseline mask, but it cannot rescue missing pose or depth. If the model
+mask fails validation, use the accepted baseline mask and its existing failure
 rule. Publish the mask with the same identity as the splat state.
 
 ## Data and training method
@@ -104,11 +109,12 @@ rule. Publish the mask with the same identity as the splat state.
    and research refresh mode will produce.
 3. Manually check person masks for selected frames. Mark matching body points
    in selected frame pairs. Keep some masks and point pairs in the untouched
-   test set. Do not treat the current depth threshold or DIS flow as ground
+   test set. Do not treat the current accepted mask or DIS flow as ground
    truth.
 4. Generate pose, depth, DIS flow, and optional high-quality flow teacher
    outputs offline. Keep model versions and input transforms in the manifest.
-   Use teacher flow only as a training target where it is valid. The held-out
+   Record the actual `mask_source` for each sample. Use teacher flow only as a
+   training target where it is valid. The held-out
    hand-marked points remain the independent motion test.
 5. Train a small encoder-decoder with `GroupNorm` and two output heads. Start
    with the existing `TinySegmentationNet` block style, but use paired-frame
@@ -127,8 +133,13 @@ rule. Publish the mask with the same identity as the splat state.
 ## Runtime sequence
 
 1. Build an offline replay tool that reads recorded clips, reuses the current
-   frame identity rules, and writes baseline and model metrics for the same
-   selected frames. This is the first integration target.
+   frame identity and window-selection rules, and writes baseline data for the
+   same selected frames. Keep session and clip IDs, source and generation,
+   selected and reference frame IDs and timestamps, RGB locations, flow,
+   model versions, resize rules, and `mask_source` in each row. Store the
+   accepted mask as `baseline_mask`; it is not a checked label. Store checked
+   masks and body-point matches separately. Split by recording session before
+   extracting pairs. Add model metrics after a checkpoint exists.
 2. Add the predictor adapter and the shared inference owner. On refresh,
    calculate pose and depth once, then calculate the baseline and model masks.
    Save an immutable research reference with the active refresh RGB, depth,
@@ -150,6 +161,14 @@ rule. Publish the mask with the same identity as the splat state.
    Make each mode an explicit launch option. Do not promote a checkpoint
    automatically.
 
+The first replay extractor is `python -m scripts.build_learning_replay --clip
+data/recordings/<clip>.mp4 --session-id <session> --split train`. Use the
+project `.venv` when the system Python lacks the pose and depth packages. Give
+all clips from one recording session the same session ID and split. The tool
+writes ignored files under `data/processed/learning_replay/`. Its
+`baseline_mask` is the accepted live mask, not a checked label. The current
+extractor has no trained-model score and no live capture-to-display measure.
+
 ## Tests and acceptance
 
 Use unit tests for paired resize and flip transforms, exact frame identity,
@@ -161,9 +180,12 @@ the `off` mode gives the same output as the current pipeline.
 Evaluate the untouched recordings with these measurements:
 
 - Person-mask intersection over union and foreground leakage against checked
-  masks. Report results for the model and the depth-threshold baseline.
+  masks. Report results for the model, the pose-gradient baseline, and the
+  pose-keypoint-hull baseline. Require at least +0.03 absolute intersection
+  over union against the stronger baseline before enabling the mask mode.
 - Body-point endpoint error in source-image pixels. Report results for the
-  corrected flow and DIS flow on the same marked pairs. Show failure examples.
+  corrected flow and DIS flow on the same marked pairs. Require at least 15
+  percent lower error before enabling the motion mode. Show failure examples.
 - Visible temporal jitter, missing body parts, and background splats in paired
   viewer recordings. Review the source view and an oblique view.
 - Median and 95th-percentile capture-to-display delay, completed model updates,
