@@ -77,15 +77,15 @@ Run the device setup script in PowerShell from the repository root. It creates
 `.venv` if needed and installs all three implemented modules in editable mode:
 
 ```powershell
-& .\scripts\setup_device.ps1
+& .\scripts\setup_system.ps1
 ```
 
 To also install RAFT Small, the script chooses a CPU or NVIDIA PyTorch wheel
 using the device's driver information. Override the wheel when needed:
 
 ```powershell
-& .\scripts\setup_device.ps1 -WithRaft
-& .\scripts\setup_device.ps1 -WithRaft -TorchWheel cpu
+& .\scripts\setup_system.ps1 -WithRaft
+& .\scripts\setup_system.ps1 -WithRaft -TorchWheel cpu
 ```
 
 Create a fresh `.venv` on each device; do not copy a virtual environment between

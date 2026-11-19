@@ -62,7 +62,7 @@ machine):
 Device setup and live diagnostics:
 
 ```powershell
-& .\scripts\setup_device.ps1                 # editable installs for stream/flow/reranker
+& .\scripts\setup_system.ps1                 # full setup: venv, modules, PyTorch, GUI, native
 & .\scripts\run_gui_preview.py --source camera --device 0 --camera-backend dshow
 ```
 

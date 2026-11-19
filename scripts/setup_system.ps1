@@ -8,7 +8,9 @@ param(
 
     [switch]$SkipNative,
 
-    [switch]$SkipGui
+    [switch]$SkipGui,
+
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -643,6 +645,38 @@ Invoke-Checked `
     -WorkingDirectory $repoRoot
 
 
+Write-Step "Running the Python test suite"
+
+if ($SkipTests) {
+    Write-Host "Skipped the Python test suite (-SkipTests)." -ForegroundColor Yellow
+}
+else {
+    # The suite must run under the virtual-environment interpreter. A bare
+    # "python" on this machine can resolve to the system Python, which has no
+    # mediapipe and fails the live construction tests.
+    & $python `
+        -m `
+        pytest `
+        -q `
+        -p `
+        no:cacheprovider `
+        --basetemp=.tmp\pytest-setup
+
+    if ($LASTEXITCODE -ne 0) {
+        throw @"
+The Python test suite failed with exit code $LASTEXITCODE.
+
+Run it yourself to see the failures:
+
+  .\.venv\Scripts\python.exe -m pytest -q
+
+"@
+    }
+
+    Write-Host "Python test suite passed."
+}
+
+
 
 
 Write-Host ""
@@ -659,6 +693,10 @@ if (-not $SkipNative) {
 
 if (-not $SkipGui) {
     Write-Host "GUI              : ready"
+}
+
+if (-not $SkipTests) {
+    Write-Host "Python tests     : passed"
 }
 
 Write-Host ""

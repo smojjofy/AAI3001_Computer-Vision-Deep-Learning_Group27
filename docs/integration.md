@@ -273,10 +273,14 @@ recorded run: 66 refreshes, 0 failures, 47 accepted motions, 0 rejected.
   ```
 
   The `horizontal_fov_deg` variant is accepted instead of `fx`/`fy`/`cx`/`cy`.
-- **Setup checks.** `scripts/setup_device.ps1` now builds and tests the native
+- **Setup checks.** The canonical setup script is `scripts/setup_system.ps1`.
   Splat Constructor and fails unless both exit 0. `-SkipNative` skips that step.
-  The Python checks moved to `scripts/check_device_setup.py` because Windows
-  PowerShell 5.1 drops inner double quotes from a native `python -c` argument.
+  It builds and tests the native
+  Splat Constructor, checks the Python and native bridge, builds the GUI, and runs
+  the Python test suite under the virtual-environment interpreter. Windows
+  PowerShell 5.1 drops inner double quotes from a native `python -c` argument, so
+  multi-part Python checks live in a script file. `scripts/setup_device.ps1` is now a
+  thin wrapper that forwards to it for existing commands.
 - **Depth validity.** The mask validity plane is passed to the construction frame
   (`depth_validity=mask_info.validity`) and covered by
   `test_construction_frame_replaces_nan_and_keeps_validity`; invalid depth is

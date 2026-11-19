@@ -3,7 +3,7 @@
 ## Device setup and live diagnostics
 
 - Purpose: repeatable setup and validation commands for each development device.
-- `setup_device.ps1` creates a local Python environment and installs the Stream Handler, Optical Flow, and Reranker modules in editable mode.
+- `setup_system.ps1` is the canonical setup script. It creates the local Python environment, installs the pipeline modules, PyTorch, the runtime packages, the GUI build, and the native components, then runs the test suite. `setup_device.ps1` forwards to it.
 - Optional RAFT setup selects a PyTorch CPU or NVIDIA wheel for the current device; the default setup needs only OpenCV DIS.
 - Inputs: Python 3.11+, network access for initial package installation, and an NVIDIA driver when CUDA RAFT is requested.
 - Outputs: an ignored `.venv/` environment. The script does not change shared packet schemas or produce recordings.

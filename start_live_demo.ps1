@@ -50,7 +50,7 @@ function Write-Step {
 
 Write-Step 'Checking the Python virtual environment'
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "Python venv not found at $python. Run .\scripts\setup_device.ps1 first."
+    throw "Python venv not found at $python. Run .\scripts\setup_system.ps1 first."
 }
 
 $env:PYTHONNOUSERSITE = '1'
@@ -62,7 +62,7 @@ $env:TEMP = $env:TMP
 Write-Step 'Checking the installed modules'
 & $python -c "import cv2, stream_handler, optical_flow, reranker" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    throw "Python modules are missing. Run .\scripts\setup_device.ps1, then run this script again."
+    throw "Python modules are missing. Run .\scripts\setup_system.ps1, then run this script again."
 }
 
 Write-Step 'Checking the native Splat Constructor'
