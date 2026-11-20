@@ -55,6 +55,31 @@ The command writes `manifest.json`, `rows.jsonl`, and frame files under
 overwrite an earlier extraction with the same session and clip IDs. It also
 refuses to give one session two different splits.
 
+Add `--staged-output` to write into a sibling staging directory and publish it
+only after the extraction and the manifest succeed. A failed run then leaves only
+a staging directory, and the session split stays reserved. This flag cannot
+repair a partial extraction that a run without the flag left in place.
+
+## Inspect the masks
+
+Run these commands from `live-splat-pipeline/` after a successful extraction.
+Both write their report to a separate folder next to the replay data, so the
+replay data stays unchanged.
+
+```powershell
+& .\.venv\Scripts\python.exe -m scripts.inspect_replay_masks `
+  --output-dir data/processed/learning_replay/person_pilot_01/movement_01
+
+& .\.venv\Scripts\python.exe -m scripts.compare_mask_strides `
+  --output-dir data/processed/learning_replay/person_pilot_01/movement_01
+```
+
+The first command writes `index.html`, `report.json`, and one overlay for each
+usable row in `movement_01.mask_report/`. The second command writes the same
+three kinds of file in `movement_01.stride_compare/`. Open the HTML pages in a
+browser. The face and hand numbers are a diagnostic proxy: a joint-derived box
+includes background, so review the paired images.
+
 ## Check the output
 
 - [ ] The command completes. The summary reports `refresh_ok` greater than
@@ -65,6 +90,9 @@ refuses to give one session two different splits.
   also have a reference RGB, reference depth, reference pose, and flow file.
   A bootstrap row has no reference. A missing-person row can have no depth or
   mask file; it must not become the next reference.
+- [ ] Successful rows also have a `mask_pose` file. It holds the unrounded
+  joints that mask selection used, plus the frame identity. A null `mask_pose`
+  is an older row and its joint-region numbers are approximate.
 - [ ] Look at at least one selected RGB image and its matching
   `baseline_mask` from stillness, raised hands, hand-near-face, side turn, and
   return. Check the same frame ID in both file names. Note missing face or
