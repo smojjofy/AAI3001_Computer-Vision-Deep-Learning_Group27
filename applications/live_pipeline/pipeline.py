@@ -72,6 +72,10 @@ class RefreshOutcome:
     capture_age_ms: float | None = None
     pose_preview: dict[str, Any] | None = None
     pose_joints: list[dict[str, Any]] | None = None
+    # The unrounded joints and joint depths that were passed to the mask
+    # selector for this frame. ``pose_joints`` above comes from the preview
+    # encoder, which rounds x, y, and visibility for display.
+    mask_pose_joints: list[dict[str, Any]] | None = None
     pose_confidence: float = 0.0
     depth_source: str = "yolo"
 
@@ -397,6 +401,7 @@ class RefreshPipeline:
             capture_age_ms=capture_age_ms,
             pose_preview=pose_preview,
             pose_joints=pose_joints,
+            mask_pose_joints=pose_joints_for_mask,
             pose_confidence=float(pose_confidence),
             depth_source=str(result.depth_source),
         )

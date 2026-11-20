@@ -100,6 +100,32 @@ def _save_estimate(
     return {"depth": depth_path, "pose": pose_path, "mask": mask_path}
 
 
+def _save_mask_pose(
+    root: Path,
+    key: str,
+    joints: list[dict[str, Any]] | None,
+    packet: Any,
+) -> str | None:
+    """Save the unrounded joints that mask selection received for this frame.
+
+    The file also records the frame identity, so a later mask comparison cannot
+    join these joints to the wrong frame. Returns None when no joint was passed
+    to mask selection.
+    """
+    if not joints:
+        return None
+    path = f"{key}_mask_pose.json"
+    payload = {
+        "schema_version": "1",
+        "frame_id": int(packet.frame_id),
+        "timestamp_ns": int(packet.capture_timestamp_ns),
+        "source_id": str(packet.source_id),
+        "joints": joints,
+    }
+    (root / path).write_text(json.dumps(payload, allow_nan=False), encoding="utf-8")
+    return path
+
+
 def _depth_histogram(depth: np.ndarray) -> dict[str, int]:
     finite = np.asarray(depth)[np.isfinite(depth)]
     counts = np.histogram(finite, bins=[0, 1, 2, 3, 5, 10, np.inf])[0]
@@ -158,6 +184,7 @@ def run_replay(
             "selected_rgb": rgb_path, "reference_rgb": None if retained is None else retained["rgb"],
             "selected_depth": None, "reference_depth": None if retained is None else retained["depth"],
             "selected_pose": None, "reference_pose": None if retained is None else retained["pose"],
+            "mask_pose": None,
             "flow": flow_path, "flow_metadata": None if selected.flow is None else selected.flow.metadata(),
             "action": decision.action, "reason": decision.reason, "flow_score": decision.score,
             "candidates": decision.candidates, "status": "ok", "error": None,
@@ -168,11 +195,13 @@ def run_replay(
             "resize": {"width": settings.research_width, "height": settings.research_height,
                        "rule": "resize RGB/depth/mask/pose to target; scale flow x by target_width/source_width and y by target_height/source_height"},
         }
+        mask_joints: list[dict[str, Any]] | None = None
         try:
             if decision.action == "refresh":
                 outcome = processor.refresh(packet, selector.generation)
                 depth = outcome.depth_m
                 joints = outcome.pose_joints
+                mask_joints = getattr(outcome, "mask_pose_joints", None)
                 mask = outcome.mask.mask
                 mask_header = outcome.header.get("mask", {})
                 row["mask_source"] = mask_header.get("source")
@@ -183,12 +212,15 @@ def run_replay(
                 counts["refresh_ok"] += 1
             else:
                 depth, joints, selection = processor.estimate_selected(packet)
+                # The reuse path selects its mask with these exact joints.
+                mask_joints = joints
                 mask = selection.info.mask
                 row["mask_source"] = selection.source
                 row["fallback_reason"] = selection.fallback_reason
                 row["mask_area_fraction"] = float(selection.info.area_fraction)
                 counts["reuse"] += 1
             paths = _save_estimate(output_dir, key, depth, joints, mask)
+            row["mask_pose"] = _save_mask_pose(output_dir, key, mask_joints, packet)
             row["selected_depth"] = paths["depth"]
             row["selected_pose"] = paths["pose"]
             row["baseline_mask"] = paths["mask"]

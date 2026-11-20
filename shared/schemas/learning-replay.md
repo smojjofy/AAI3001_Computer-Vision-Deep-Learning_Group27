@@ -12,11 +12,19 @@ recorded clip. The output directory is local processed data and is not committed
   `status` is `ok`, `person_missing`, or `error`. A failed refresh does not
   advance the retained reference.
 - `selected_rgb`, `reference_rgb`, `flow`, `selected_depth`, `reference_depth`,
-  `selected_pose`, `reference_pose`, and `baseline_mask` are relative paths or
-  null. RGB and mask files are lossless PNG. Depth files are NPZ with `depth_m`
-  (float32 metres, NaN for invalid) and `validity` (float32, zero or one).
-  Flow files are NPZ with `flow` (float32 [H,W,2] in pixels at flow resolution)
-  and `valid_mask` (uint8 [H,W]); the direction is reference to selected.
+  `selected_pose`, `reference_pose`, `mask_pose`, and `baseline_mask` are
+  relative paths or null. RGB and mask files are lossless PNG. Depth files are
+  NPZ with `depth_m` (float32 metres, NaN for invalid) and `validity` (float32,
+  zero or one). Flow files are NPZ with `flow` (float32 [H,W,2] in pixels at flow
+  resolution) and `valid_mask` (uint8 [H,W]); the direction is reference to
+  selected.
+- `selected_pose` holds the display joints. The preview encoder rounds x and y
+  to four decimals and visibility to two, so it is not exact for measurement.
+  `mask_pose` is a separate JSON file with the unrounded joints and joint depths
+  that mask selection received for this frame: `schema_version`, `frame_id`,
+  `timestamp_ns`, `source_id`, and `joints` (one record for each landmark with
+  `index`, `x`, `y`, `visibility`, and `depth_m`). It is null when mask selection
+  received no joint record, and it is not written for a row whose refresh failed.
 - `mask_source` is `pose_gradient` or `depth_threshold_fallback` when a mask
   exists. `fallback_reason`, `mask_area_fraction`, `splat_count`, and
   `timings_ms` record the accepted baseline result. A baseline mask is a model
