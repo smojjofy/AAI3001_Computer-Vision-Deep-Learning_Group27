@@ -15,6 +15,7 @@ from applications.live_pipeline.pose_gradient_mask import (
     joint_depth_range,
     pose_seed_mask,
     pose_watershed_mask,
+    validate_gradient_stride,
 )
 
 
@@ -161,3 +162,51 @@ def test_validity_gate_is_a_noop_without_joint_depths() -> None:
     mask = np.ones((8, 8), dtype=np.uint8)
     validity = gate_validity_to_joint_depth(mask, depth, [{"x": 0.5, "y": 0.5}])
     assert float(validity.mean()) == 1.0
+
+
+def test_gradient_stride_default_matches_explicit_four() -> None:
+    depth = depth_with_person()
+    joints = torso_joints()
+    default_mask, default_reason = pose_watershed_mask(depth, joints)
+    explicit_mask, explicit_reason = pose_watershed_mask(depth, joints, gradient_stride=4)
+    assert default_reason == explicit_reason
+    assert np.array_equal(default_mask, explicit_mask)
+
+
+def test_gradient_stride_one_uses_the_full_image() -> None:
+    depth = depth_with_person()
+    mask, reason = pose_watershed_mask(depth, torso_joints(), gradient_stride=1)
+    assert reason == "ok"
+    assert mask[24, 32] == 1
+    assert mask[1, 1] == 0
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, False, 2.5, "4", None])
+def test_gradient_stride_rejects_bad_values(bad) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        pose_watershed_mask(depth_with_person(), torso_joints(), gradient_stride=bad)
+
+
+def test_gradient_stride_accepts_numpy_integers() -> None:
+    depth = depth_with_person()
+    joints = torso_joints()
+    numpy_mask, numpy_reason = pose_watershed_mask(
+        depth, joints, gradient_stride=np.int64(4)
+    )
+    int_mask, int_reason = pose_watershed_mask(depth, joints, gradient_stride=4)
+    assert numpy_reason == int_reason
+    assert np.array_equal(numpy_mask, int_mask)
+
+
+def test_gradient_stride_larger_than_the_image_still_runs() -> None:
+    # The subsample becomes one pixel. The percentile is then that single value.
+    mask, reason = pose_watershed_mask(
+        depth_with_person(), torso_joints(), gradient_stride=10_000
+    )
+    assert reason in {"ok", "no_region", "too_small", "too_large", "flat_depth"}
+    assert mask.shape == (48, 64)
+
+
+def test_validate_gradient_stride_returns_a_plain_int() -> None:
+    assert validate_gradient_stride(np.int32(3)) == 3
+    assert type(validate_gradient_stride(np.int32(3))) is int

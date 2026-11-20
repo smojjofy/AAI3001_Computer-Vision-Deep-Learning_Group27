@@ -219,12 +219,14 @@ def select_pose_gradient_mask(
     pose_joints: list[dict] | None,
     config: DepthThresholdConfig | None = None,
     pose_margin: float = 0.12,
+    gradient_stride: int = 4,
 ) -> MaskSelection:
     """Use the pose-seeded watershed gradient mask, with the band as fallback.
 
     The gradient mask needs a depth discontinuity around the pose. When it is not
     available (no pose, flat depth, or area guard failure) the depth-threshold
-    band runs and the reason is recorded.
+    band runs and the reason is recorded. ``gradient_stride`` is passed through
+    unchanged; the live path keeps the default of 4.
     """
     config = config or DepthThresholdConfig()
     depth = np.asarray(depth_m, dtype=np.float32)
@@ -236,6 +238,7 @@ def select_pose_gradient_mask(
         pose_margin=pose_margin,
         min_area_fraction=config.min_area_fraction,
         max_area_fraction=config.max_area_fraction,
+        gradient_stride=gradient_stride,
     )
     if reason == "ok":
         return MaskSelection(

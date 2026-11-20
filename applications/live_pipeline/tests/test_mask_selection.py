@@ -8,10 +8,16 @@ capture generation.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from applications.live_pipeline.adapters import DepthThresholdConfig
 from applications.live_pipeline.background_calibration import BackgroundBaseline
-from applications.live_pipeline.mask_selection import pose_region_mask, select_person_mask
+from applications.live_pipeline import mask_selection as mask_selection_module
+from applications.live_pipeline.mask_selection import (
+    pose_region_mask,
+    select_person_mask,
+    select_pose_gradient_mask,
+)
 
 
 def baseline_for(
@@ -168,3 +174,59 @@ def test_pose_gate_removes_background_noise_from_the_candidate() -> None:
     assert gated.info.mask[12, 16] == 1
     assert gated.info.mask[3, 3] == 0
     assert gated.info.area_fraction < 0.6
+
+
+def pose_gradient_depth() -> np.ndarray:
+    # A person block at 1.5 m in front of a 4.0 m wall.
+    depth = np.full((48, 64), 4.0, dtype=np.float32)
+    depth[14:38, 18:46] = 1.5
+    return depth
+
+
+def pose_gradient_joints() -> list[dict]:
+    return [
+        {"x": 0.35, "y": 0.38, "visibility": 0.9, "depth_m": 1.5},
+        {"x": 0.65, "y": 0.38, "visibility": 0.9, "depth_m": 1.5},
+        {"x": 0.35, "y": 0.72, "visibility": 0.8, "depth_m": 1.5},
+        {"x": 0.65, "y": 0.72, "visibility": 0.8, "depth_m": 1.5},
+    ]
+
+
+def test_pose_gradient_selection_uses_the_gradient_mask() -> None:
+    selection = select_pose_gradient_mask(
+        pose_gradient_depth(), pose_joints=pose_gradient_joints()
+    )
+    assert selection.source == "pose_gradient"
+    assert selection.fallback_reason is None
+    assert selection.info.mask[26, 32] == 1
+    assert selection.info.mask[1, 1] == 0
+
+
+def test_pose_gradient_selection_falls_back_without_pose() -> None:
+    selection = select_pose_gradient_mask(pose_gradient_depth(), pose_joints=None)
+    assert selection.source == "depth_threshold_fallback"
+    assert selection.fallback_reason == "no_pose"
+
+
+def test_pose_gradient_selection_passes_the_stride_through(monkeypatch) -> None:
+    seen: dict = {}
+
+    def fake_mask(depth_m, joints, **kwargs):
+        seen.update(kwargs)
+        return np.zeros(np.shape(depth_m), np.uint8), "no_pose"
+
+    monkeypatch.setattr(mask_selection_module, "pose_watershed_mask", fake_mask)
+    depth = np.zeros((4, 4), dtype=np.float32)
+
+    select_pose_gradient_mask(depth, pose_joints=None)
+    assert seen["gradient_stride"] == 4
+
+    select_pose_gradient_mask(depth, pose_joints=None, gradient_stride=1)
+    assert seen["gradient_stride"] == 1
+
+
+def test_pose_gradient_stride_is_validated() -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        select_pose_gradient_mask(
+            pose_gradient_depth(), pose_joints=pose_gradient_joints(), gradient_stride=0
+        )

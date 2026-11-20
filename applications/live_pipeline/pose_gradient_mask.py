@@ -11,6 +11,8 @@ joints in normalized image coordinates.
 
 from __future__ import annotations
 
+import numbers
+
 import cv2
 import numpy as np
 
@@ -134,6 +136,23 @@ def joint_depth_range(
     return max(0.0, low), high
 
 
+def validate_gradient_stride(gradient_stride: int) -> int:
+    """Return the stride as a plain positive ``int``, or raise ``ValueError``.
+
+    The stride subsamples the gradient image to estimate one percentile. It must
+    be a positive whole number. ``bool`` is rejected on purpose, because ``True``
+    would silently mean stride 1.
+    """
+    if isinstance(gradient_stride, bool) or not isinstance(
+        gradient_stride, numbers.Integral
+    ):
+        raise ValueError("gradient_stride must be a positive integer")
+    stride = int(gradient_stride)
+    if stride < 1:
+        raise ValueError("gradient_stride must be a positive integer")
+    return stride
+
+
 def pose_watershed_mask(
     depth_m: np.ndarray,
     joints: list[dict] | None,
@@ -143,12 +162,15 @@ def pose_watershed_mask(
     min_contrast_m: float = 0.15,
     min_area_fraction: float = 0.005,
     max_area_fraction: float = 0.60,
+    gradient_stride: int = 4,
 ) -> tuple[np.ndarray, str]:
     """Return a person mask that wraps the pose, and a reason.
 
     ``reason`` is ``ok``, ``no_pose``, ``too_small``, ``too_large``, or
-    ``no_region``.
+    ``no_region``. ``gradient_stride`` sets the gradient subsample step. The live
+    pipeline uses 4. A stride of 1 uses the full image.
     """
+    stride = validate_gradient_stride(gradient_stride)
     depth = np.asarray(depth_m, dtype=np.float32)
     if depth.ndim != 2:
         raise ValueError("depth_m must be a 2-D array")
@@ -196,11 +218,11 @@ def pose_watershed_mask(
     markers[:, 0] = 2
     markers[:, -1] = 2
 
-    # A stride-4 subsample estimates the full-image percentile. Measured against
-    # the full image on three real frames, the resulting mask differs by about
-    # 1 percent (intersection over union 0.988 to 0.998) at about a quarter of
-    # the cost. It is an estimate, not the identical statistic.
-    sample = gradient[::4, ::4]
+    # The stride subsample estimates the full-image percentile. Measured with the
+    # default stride 4 against the full image on three real frames, the resulting
+    # mask differs by about 1 percent (intersection over union 0.988 to 0.998) at
+    # about a quarter of the cost. It is an estimate, not the identical statistic.
+    sample = gradient[::stride, ::stride]
     scale = max(1e-3, float(np.percentile(sample, gradient_percentile)))
     gradient_u8 = np.clip(gradient / scale * 255.0, 0, 255).astype(np.uint8)
     color = cv2.cvtColor(gradient_u8, cv2.COLOR_GRAY2BGR)
