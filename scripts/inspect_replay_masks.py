@@ -72,6 +72,8 @@ class RowResult:
     pose_joint_source: str
     exact_mask_joints: bool
     usable_pose: bool
+    # The replay's own ``pose_detected`` value: True, False, or None when absent.
+    pose_detected: bool | None = None
     overlay: str | None = None
     problems: list[str] = field(default_factory=list)
     regions: dict[str, RegionResult | None] = field(default_factory=dict)
@@ -201,6 +203,17 @@ def _usable_pose(joints: list[dict] | None) -> bool:
     return False
 
 
+def _pose_detected_value(row: dict) -> bool | None:
+    """Return the replay ``pose_detected`` value as a boolean, or None.
+
+    A null value means the field is absent or unknown. It is not False.
+    """
+    value = row.get("pose_detected")
+    if value is None:
+        return None
+    return bool(value)
+
+
 def _draw_overlay(
     rgb: np.ndarray,
     mask: np.ndarray,
@@ -246,6 +259,7 @@ def inspect_row(
         pose_joint_source="absent",
         exact_mask_joints=False,
         usable_pose=False,
+        pose_detected=_pose_detected_value(row),
     )
     joints, joint_source = load_mask_joints(output_dir, row)
     result.pose_joint_source = joint_source
@@ -353,6 +367,12 @@ def build_summary(rows: list[RowResult], *, pad_px: int) -> dict:
             entry["person_missing_rows"] += 1
         if row.status == "error":
             entry["error_rows"] += 1
+        # These two counters read the replay's own pose_detected value. A null
+        # value is counted separately and is never treated as False.
+        if row.pose_detected is False:
+            entry["pose_detected_false_rows"] += 1
+        elif row.pose_detected is None:
+            entry["pose_detected_null_rows"] += 1
         if row.mask_area_fraction is not None:
             entry["mask_area_fractions"].append(float(row.mask_area_fraction))
 
@@ -409,6 +429,11 @@ def build_summary(rows: list[RowResult], *, pad_px: int) -> dict:
             "absent": sum(1 for row in rows if not row.mask_present),
         },
         "pose_joint_record": dict(sorted(joint_sources.items())),
+        "pose_detected_values": {
+            "true": sum(1 for row in rows if row.pose_detected is True),
+            "false": sum(1 for row in rows if row.pose_detected is False),
+            "null": sum(1 for row in rows if row.pose_detected is None),
+        },
         "rows_with_usable_pose": sum(1 for row in rows if row.usable_pose),
         "rows_with_problems": sum(1 for row in rows if row.problems),
         "by_mask_source": source_rows,
@@ -443,6 +468,7 @@ def _row_payload(row: RowResult) -> dict:
         "pose_joint_source": row.pose_joint_source,
         "exact_mask_joints": row.exact_mask_joints,
         "usable_pose": row.usable_pose,
+        "pose_detected": row.pose_detected,
         "overlay": row.overlay,
         "problems": row.problems,
         "excluded": row.excluded,
@@ -468,19 +494,22 @@ def _render_html(report: dict) -> str:
         f"rows with problems: {summary['rows_with_problems']} | visibility floor: "
         f"{summary['visibility_floor']} | region pad: {summary['region_pad_px']} px | "
         f"minimum region joints: {summary['min_region_joints']}</p>",
+        f"<p>Replay <code>pose_detected</code> values: {escape(json.dumps(summary['pose_detected_values']))}. "
+        "A null value is unknown, not False.</p>",
         "<h2>Mask sources</h2>",
         "<table><tr><th>mask_source</th><th>fallback_reason</th><th>rows</th>"
         "<th>area p05</th><th>area p50</th><th>area p95</th><th>person_missing</th>"
-        "<th>error</th></tr>",
+        "<th>error</th><th>pose_detected false</th><th>pose_detected null</th></tr>",
     ]
     for entry in summary["by_mask_source"]:
         area = entry["mask_area"]
         lines.append(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>"
-            "<td>{}</td><td>{}</td></tr>".format(
+            "<td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
                 escape(str(entry["mask_source"])), escape(str(entry["fallback_reason"])),
                 entry["rows"], area["p05"], area["p50"], area["p95"],
                 entry["person_missing_rows"], entry["error_rows"],
+                entry["pose_detected_false_rows"], entry["pose_detected_null_rows"],
             )
         )
     lines.append("</table>")
@@ -587,12 +616,15 @@ def print_report(report: dict, log=print) -> None:
     log(f"rows: {summary['rows_total']}  status: {summary['row_status']}")
     log(f"mask present: {summary['mask_presence']}")
     log(f"joint records: {summary['pose_joint_record']}")
+    log(f"pose_detected values: {summary['pose_detected_values']}")
     for entry in summary["by_mask_source"]:
         area = entry["mask_area"]
         log(
-            "source={} fallback={} rows={} area p05/p50/p95={}/{}/{}".format(
+            "source={} fallback={} rows={} area p05/p50/p95={}/{}/{} "
+            "pose_detected false/null={}/{}".format(
                 entry["mask_source"], entry["fallback_reason"], entry["rows"],
                 area["p05"], area["p50"], area["p95"],
+                entry["pose_detected_false_rows"], entry["pose_detected_null_rows"],
             )
         )
     for name, region in summary["regions"].items():

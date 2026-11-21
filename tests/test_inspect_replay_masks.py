@@ -229,6 +229,63 @@ def test_missing_rows_file_is_reported(tmp_path: Path) -> None:
         module.inspect_replay(tmp_path / "empty", report_dir=tmp_path / "report")
 
 
+def test_pose_detected_false_and_null_are_counted_per_source(
+    replay_dir: Path, tmp_path: Path
+) -> None:
+    # RT-0076: the summary created these counters but never incremented them.
+    # Row 2 becomes a false no-pose fallback row, row 3 has a null value, and row
+    # 4 keeps true. A null value must not be counted as false.
+    rows_path = replay_dir / "rows.jsonl"
+    rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
+    rows[1]["pose_detected"] = False
+    rows[2]["pose_detected"] = None
+    rows[3]["pose_detected"] = True
+    rows[4]["pose_detected"] = True
+    rows_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    report = inspect(replay_dir, tmp_path / "report")
+    summary = report["summary"]
+    assert summary["pose_detected_values"] == {"true": 2, "false": 1, "null": 2}
+
+    fallback = next(
+        entry for entry in summary["by_mask_source"]
+        if entry["mask_source"] == "depth_threshold_fallback"
+    )
+    assert fallback["rows"] == 1
+    assert fallback["pose_detected_false_rows"] == 1
+    assert fallback["pose_detected_null_rows"] == 0
+
+    # There is one pose_gradient group: rows 1, 3, 4 and 5. Row 3 is the
+    # person_missing row with no mask. Rows 1 and 3 have no value and rows 4 and
+    # 5 are True, so the group has two null values and no false value.
+    pose_gradient = next(
+        entry for entry in summary["by_mask_source"] if entry["mask_source"] == "pose_gradient"
+    )
+    assert pose_gradient["rows"] == 4
+    assert pose_gradient["person_missing_rows"] == 1
+    assert pose_gradient["pose_detected_false_rows"] == 0
+    assert pose_gradient["pose_detected_null_rows"] == 2
+
+    page = (tmp_path / "report" / "index.html").read_text(encoding="utf-8")
+    assert "pose_detected false" in page
+    assert "unknown, not False" in page
+
+
+def test_pose_detected_counts_that_were_always_zero_are_now_derived(
+    replay_dir: Path, tmp_path: Path
+) -> None:
+    # With no value in the rows, every source group reports zero false and all
+    # rows count as null. This proves the counters read the row value and are
+    # not a hard-coded placeholder.
+    report = inspect(replay_dir, tmp_path / "report")
+    assert report["summary"]["pose_detected_values"] == {"true": 0, "false": 0, "null": 5}
+    for entry in report["summary"]["by_mask_source"]:
+        assert entry["pose_detected_false_rows"] == 0
+        assert entry["pose_detected_null_rows"] == entry["rows"]
+    rows = {row["frame_id"]: row for row in report["rows"]}
+    assert rows[1]["pose_detected"] is None
+
+
 def test_summary_prints_every_source_group(replay_dir: Path, tmp_path: Path) -> None:
     report = inspect(replay_dir, tmp_path / "report")
     lines: list[str] = []
