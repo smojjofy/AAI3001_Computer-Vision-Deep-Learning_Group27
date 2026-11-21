@@ -80,6 +80,53 @@ three kinds of file in `movement_01.stride_compare/`. Open the HTML pages in a
 browser. The face and hand numbers are a diagnostic proxy: a joint-derived box
 includes background, so review the paired images.
 
+## Check masks by hand
+
+A saved `baseline_mask` is model output. It is not a checked label. Three
+commands turn a review set into checked masks and a scored comparison:
+
+```powershell
+# 1. Write the review set: low-agreement frames, a spread of high-agreement
+#    frames, every no-pose fallback row, and missing-person samples.
+& .\.venv\Scripts\python.exe -m scripts.learning_data review-set `
+  --output-dir data/processed/learning_replay/person_pilot_01/movement_01
+
+# 2. Draw the true person mask for each review frame. The window uses the
+#    standard library and OpenCV only.
+& .\.venv\Scripts\python.exe -m scripts.label_review_masks `
+  --review-dir data/processed/learning_replay/person_pilot_01/movement_01.review `
+  --labels-root data/processed/learning_replay/labels --dataset movement_01
+
+# 3. Score the live mask and the stride variants against the checked masks.
+& .\.venv\Scripts\python.exe -m scripts.learning_data evaluate `
+  --output-dir data/processed/learning_replay/person_pilot_01/movement_01 `
+  --labels-root data/processed/learning_replay/labels --dataset movement_01
+```
+
+In the label window: left drag paints, right drag erases, `d` clears the frame,
+`[` and `]` change the brush, `g` saves, `s` skips, `p` goes back, `q` quits.
+Press `d` twice on an empty frame to record "no person". The checked masks go to
+`labels/movement_01/masks/` and never into the replay data.
+
+The evaluation writes `movement_01.eval/index.html`. Person coverage is the part
+of the checked person that a mask keeps. Background leakage is the mask area
+outside the checked person, and the largest leakage component shows a solid
+false region such as a door or a desk.
+
+## Record the training set
+
+```powershell
+& .\.venv\Scripts\python.exe -m scripts.learning_data training-filter `
+  --output-dir data/processed/learning_replay/person_pilot_01/movement_01 `
+  --labels-root data/processed/learning_replay/labels --dataset movement_01
+```
+
+The command writes `movement_01.training_filter.json` with the eligible rows and
+the count for each exclusion reason: a failed row, a row with no reference, a
+no-pose fallback mask, a row without `mask_pose`, a row without selected depth,
+and a row without a checked mask. A pair enters the first 15-channel set only
+with a checked person-mask label.
+
 ## Check the output
 
 - [ ] The command completes. The summary reports `refresh_ok` greater than
