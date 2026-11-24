@@ -27,6 +27,7 @@ ZED frames:
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from time import perf_counter
 
 import cv2
@@ -230,11 +231,15 @@ class PoseDepthPipeline:
         source_id: str,
         capture_timestamp_ns: int,
         depth: np.ndarray | DepthEstimation | None = None,
+        depth_source: str | None = None,
     ) -> PipelineResult:
         """Pose + depth for one RGB uint8 frame.
 
         depth: ZED depth for this frame (array, metres x depth_scale, or a DepthEstimation).
                None = estimate it with YOLO depth.
+        depth_source: label for a supplied depth plane, for example ``zed`` or
+               ``stereo_sgbm``. It is recorded on the result and published in the
+               splat header. None keeps the historical ``zed`` label.
         """
         if self._pose is None:
             raise RuntimeError("this PoseDepthPipeline was closed")
@@ -251,12 +256,21 @@ class PoseDepthPipeline:
             depth_frame = self.depth_estimator.estimate_frame(rgb_frame, **identity)
             source = "yolo"
         else:
-            if not isinstance(depth, DepthEstimation):
-                depth = external_depth(depth, rgb_frame.shape[:2], self.depth_scale)
-            elif depth.shape != rgb_frame.shape[:2]:
-                raise ValueError(f"depth is {depth.shape} but the frame is {rgb_frame.shape[:2]}")
-            depth_frame = DepthFrameResult(depth=depth, **identity)
-            source = "zed"
+            # A supplied depth plane is not necessarily ZED SDK depth: it may
+            # come from the stereo matcher or a recorded array. Label it with
+            # what the caller says it is, and only fall back to "zed" when the
+            # caller gives no label. Labelling every external plane "zed"
+            # published stereo results under the wrong name.
+            if isinstance(depth, DepthEstimation):
+                depth_estimation = depth
+            else:
+                depth_estimation = external_depth(depth, rgb_frame.shape[:2], self.depth_scale)
+            if depth_estimation.shape != rgb_frame.shape[:2]:
+                raise ValueError(
+                    f"depth is {depth_estimation.shape} but the frame is {rgb_frame.shape[:2]}"
+                )
+            depth_frame = DepthFrameResult(depth=depth_estimation, **identity)
+            source = str(depth_source) if depth_source is not None else "zed"
         t2 = perf_counter()
 
         fused = fuse_pose_depth(pose, depth_frame, radius=self.joint_radius, min_visibility=self.min_visibility)
@@ -278,3 +292,125 @@ class PoseDepthPipeline:
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.close()
+
+
+@dataclass(frozen=True)
+class StereoFallbackConfig:
+    """When a selected frame keeps its stereo depth and when it uses YOLO.
+
+    The plan requires a whole-frame decision: stereo depth is either used for
+    the frame or replaced by YOLO depth, never mixed pixel by pixel in this
+    first experiment.
+
+    - ``min_valid_fraction``: the smallest share of pixels that must carry a
+      usable stereo depth.
+    - ``min_person_fraction``: with a person mask, the smallest share of the
+      masked person that must carry a usable stereo depth. The face and the
+      hands are the hard cases, so a mask that is mostly unmatched is not
+      usable even when the whole frame looks healthy.
+    - ``max_depth_m``: optional upper bound. None keeps the plan's literal rule
+      that any positive disparity is a valid depth.
+    """
+
+    min_valid_fraction: float = 0.15
+    min_person_fraction: float = 0.50
+    max_depth_m: float | None = None
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.min_valid_fraction <= 1.0:
+            raise ValueError("min_valid_fraction must be in [0, 1]")
+        if not 0.0 <= self.min_person_fraction <= 1.0:
+            raise ValueError("min_person_fraction must be in [0, 1]")
+        if self.max_depth_m is not None and (
+            not np.isfinite(self.max_depth_m) or self.max_depth_m <= 0.0
+        ):
+            raise ValueError("max_depth_m must be positive and finite when set")
+
+
+def apply_stereo_depth_cap(
+    depth: np.ndarray, validity: np.ndarray, max_depth_m: float
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Invalidate depths beyond ``max_depth_m`` and report how many were cut.
+
+    The plan allows any positive disparity, so a distant background match can
+    imply a depth of tens of metres. This helper is off by default; it exists so
+    a caller can bound the result and see the count rather than guess.
+    """
+    if not np.isfinite(max_depth_m) or max_depth_m <= 0.0:
+        raise ValueError("max_depth_m must be positive and finite")
+    values = np.array(depth, dtype=np.float32, copy=True)
+    flags = np.array(validity, dtype=bool, copy=True)
+    too_far = flags & np.isfinite(values) & (values > float(max_depth_m))
+    count = int(np.count_nonzero(too_far))
+    flags &= ~too_far
+    values[~flags] = np.nan
+    return values, flags, count
+
+
+def stereo_frame_usable(
+    depth: np.ndarray,
+    validity: np.ndarray,
+    *,
+    person_mask: np.ndarray | None = None,
+    config: StereoFallbackConfig | None = None,
+) -> tuple[bool, str, dict[str, Any]]:
+    """Decide whether this frame keeps stereo depth, and say why.
+
+    Returns ``(usable, reason, detail)``. ``reason`` is ``ok`` when stereo is
+    kept, otherwise it names the first condition that failed so a report can
+    count fallbacks by cause instead of lumping them together.
+    """
+    settings = config or StereoFallbackConfig()
+    values = np.asarray(depth, dtype=np.float32)
+    if values.ndim != 2:
+        raise ValueError(f"depth must be [H, W], got shape {values.shape}")
+    flags = np.asarray(validity, dtype=bool)
+    if flags.shape != values.shape:
+        raise ValueError("validity must have the shape of the depth plane")
+    # A pixel counts as usable only when it is marked valid AND holds a
+    # positive finite value, so a caller cannot claim a pixel it cannot fill.
+    flags = flags & np.isfinite(values) & (values > 0.0)
+
+    total = int(values.size)
+    valid_count = int(np.count_nonzero(flags))
+    valid_fraction = float(valid_count / total) if total else 0.0
+    detail: dict[str, Any] = {
+        "valid_pixels": valid_count,
+        "total_pixels": total,
+        "valid_fraction": round(valid_fraction, 4),
+        "min_valid_fraction": settings.min_valid_fraction,
+    }
+    if valid_count == 0:
+        return False, "no_valid_pixels", detail
+    if valid_fraction < settings.min_valid_fraction:
+        return False, "valid_fraction_below_minimum", detail
+
+    if person_mask is not None:
+        mask = np.asarray(person_mask, dtype=bool)
+        if mask.shape != values.shape:
+            raise ValueError("person_mask must have the shape of the depth plane")
+        person_pixels = int(np.count_nonzero(mask))
+        person_valid = int(np.count_nonzero(flags & mask))
+        person_fraction = float(person_valid / person_pixels) if person_pixels else 0.0
+        detail.update(
+            {
+                "person_pixels": person_pixels,
+                "person_valid_pixels": person_valid,
+                "person_valid_fraction": round(person_fraction, 4),
+                "min_person_fraction": settings.min_person_fraction,
+            }
+        )
+        if person_pixels == 0:
+            return False, "empty_person_mask", detail
+        if person_fraction < settings.min_person_fraction:
+            return False, "person_fraction_below_minimum", detail
+
+    if settings.max_depth_m is not None:
+        capped, capped_flags, cut = apply_stereo_depth_cap(
+            values, flags, settings.max_depth_m
+        )
+        detail["pixels_beyond_max_depth"] = cut
+        if not capped_flags.any():
+            return False, "all_depths_beyond_maximum", detail
+
+    return True, "ok", detail
