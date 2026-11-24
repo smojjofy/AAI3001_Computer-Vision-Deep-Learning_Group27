@@ -24,6 +24,12 @@ replace the separate joint learning plan in `docs/DEEP_LEARNING_PLAN.md`.
 
 ## Capture and frame contract
 
+**Progress: steps 1 to 4 are implemented and tested.** `FramePacket` carries an
+optional rectified right view (`right_rgb`) and a frozen `StereoCalibration`
+record, the ZED source emits the pair under `DEPTH_MODE.NONE`, and
+`frame_packet.schema.json` is version 1.1. Step 5, adding `zed` to the
+application source choices, was already present in the frozen demo.
+
 1. Open the ZED SDK with `DEPTH_MODE.NONE`. Do not request an SDK depth map in
    the live path. Start at HD720 and 30 frames per second. From one successful
    `grab()`, retrieve rectified `LEFT` and `RIGHT` images and the image capture
@@ -129,6 +135,7 @@ and make an independent live delay measurement before claiming this gate.
 
 This experiment uses one static ZED 2i on one computer. It adds stereo depth
 for the left source view. It does not add two-view splat fusion, moving-camera
-tracking, online training, or live ZED SDK depth. The camera is not present, so
-all device results and parameter calibration remain unverified until the
-recorded and live checks run.
+tracking, online training, or live ZED SDK depth. **The camera is present and
+working.** The measured device facts are recorded under verification below, and
+the capture contract is implemented; parameter calibration and the quality and
+delay gates remain unverified until the recorded and live checks run.
