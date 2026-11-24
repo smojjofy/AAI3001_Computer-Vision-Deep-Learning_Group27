@@ -1,6 +1,6 @@
 """Capture sources and contracts for the live reconstruction pipeline."""
 
-from .contracts import FramePacket, FrameQuality, TimestampOrigin
+from .contracts import FramePacket, FrameQuality, StereoCalibration, TimestampOrigin
 from .handler import StreamHandler
 from .queue import LatestFrameQueue
 from .sources import (
@@ -21,7 +21,7 @@ from .sources import (
 __all__ = [
     "CameraSource", "FramePacket", "FrameQuality", "IterableFrameSource",
     "LatestFrameQueue", "OBSVirtualCameraSource", "RecordedVideoSource",
-    "ReplayMode", "RTSPSource", "SourceExhausted", "SourceFrame", "StreamHandler",
+    "ReplayMode", "RTSPSource", "SourceExhausted", "SourceFrame", "StereoCalibration", "StreamHandler",
     "StreamHealth", "TimestampOrigin", "ZedCameraSource", "describe_zed_devices",
     "zed_is_available",
 ]

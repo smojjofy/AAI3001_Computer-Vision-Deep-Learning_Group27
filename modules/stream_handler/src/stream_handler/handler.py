@@ -100,6 +100,14 @@ class StreamHandler:
             depth=source_frame.depth,
             depth_units=source_frame.depth_units,
             intrinsics=source_frame.intrinsics,
+            right_rgb=(
+                None
+                if source_frame.right_image is None
+                else self._as_rgb8_plane(
+                    source_frame.right_image, source_frame.right_pixel_format, "right_image"
+                )
+            ),
+            stereo=source_frame.stereo,
         )
         self._next_frame_id += 1
         self.queue.put(
@@ -216,6 +224,21 @@ class StreamHandler:
                 self.metrics.timestamp_backwards += 1
         self._last_source_timestamp_ns = source_timestamp_ns
         return status
+
+    @staticmethod
+    def _as_rgb8_plane(image: np.ndarray, pixel_format: str, name: str) -> np.ndarray:
+        """Convert one image plane to a contiguous RGB8 array.
+
+        ``name`` appears in the error text so a caller can tell the left and
+        right views apart when only one of them is malformed.
+        """
+        if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
+            raise ValueError(f"{name} must be uint8 with shape [height, width, 3]")
+        if pixel_format == "RGB8":
+            return np.ascontiguousarray(image)
+        if pixel_format == "BGR8":
+            return np.ascontiguousarray(image[:, :, ::-1])
+        raise ValueError(f"unsupported {name} pixel format: {pixel_format}")
 
     @staticmethod
     def _as_rgb8(frame: SourceFrame) -> np.ndarray:

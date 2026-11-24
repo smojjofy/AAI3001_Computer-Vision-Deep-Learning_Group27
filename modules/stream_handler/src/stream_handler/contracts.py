@@ -26,6 +26,60 @@ class FrameQuality:
     exposure_flag: bool | None = None
 
 
+@dataclass(frozen=True)
+class StereoCalibration:
+    """Immutable rectified stereo calibration for one image size.
+
+    Both rectified views of a ZED camera share the focal lengths and the
+    principal point, so one record describes the pair. ``baseline_m`` is the
+    distance between the two rectified camera centres, in metres.
+
+    The record is frozen because a packet must never describe pixels from one
+    calibration with numbers from another. Build a new record when the
+    resolution changes.
+    """
+
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    baseline_m: float
+    width: int
+    height: int
+
+    def __post_init__(self) -> None:
+        values = (self.fx, self.fy, self.cx, self.cy, self.baseline_m)
+        if not all(np.isfinite(value) for value in values):
+            raise ValueError("stereo calibration must be finite")
+        if self.fx <= 0.0 or self.fy <= 0.0:
+            raise ValueError("stereo calibration focal lengths must be positive")
+        if self.baseline_m <= 0.0:
+            raise ValueError("stereo baseline must be positive")
+        if int(self.width) < 1 or int(self.height) < 1:
+            raise ValueError("stereo calibration dimensions must be positive")
+
+    @property
+    def intrinsics(self) -> tuple[float, float, float, float]:
+        """The ``(fx, fy, cx, cy)`` tuple that the depth adapters take."""
+        return (float(self.fx), float(self.fy), float(self.cx), float(self.cy))
+
+    def matches(self, width: int, height: int) -> bool:
+        """True when this record describes an image of exactly this size."""
+        return int(self.width) == int(width) and int(self.height) == int(height)
+
+    def as_dict(self) -> dict[str, Any]:
+        """Plain data for a JSON envelope."""
+        return {
+            "fx": float(self.fx),
+            "fy": float(self.fy),
+            "cx": float(self.cx),
+            "cy": float(self.cy),
+            "baseline_m": float(self.baseline_m),
+            "width": int(self.width),
+            "height": int(self.height),
+        }
+
+
 @dataclass
 class FramePacket:
     """A decoded RGB8 frame and identity metadata.
@@ -39,6 +93,12 @@ class FramePacket:
     - ``depth_units``: ``"millimetres"`` or ``"metres"``. Required with depth.
     - ``depth_validity``: optional float32 ``[H, W]`` weight in ``[0, 1]``.
     - ``intrinsics``: ``(fx, fy, cx, cy)`` in pixels for this image size.
+    - ``right_rgb``: optional uint8 ``[H, W, 3]`` rectified right view of the
+      same frame. One packet owns one left-right pair, so both views always
+      share one frame ID, one source ID, and one capture timestamp. Sources
+      without a second view leave it as ``None``.
+    - ``stereo``: optional :class:`StereoCalibration` that describes the pair.
+      Required with ``right_rgb``, and its size must match the image.
     """
 
     frame_id: int
@@ -53,7 +113,9 @@ class FramePacket:
     depth_units: str | None = None
     depth_validity: np.ndarray | None = None
     intrinsics: tuple[float, float, float, float] | None = None
-    schema_version: str = "1.0"
+    right_rgb: np.ndarray | None = None
+    stereo: StereoCalibration | None = None
+    schema_version: str = "1.1"
 
     def __post_init__(self) -> None:
         if self.frame_id < 0:
@@ -84,6 +146,35 @@ class FramePacket:
                 raise ValueError("intrinsics must be finite")
             if fx <= 0.0 or fy <= 0.0:
                 raise ValueError("fx and fy must be positive")
+        self._check_stereo()
+
+    def _check_stereo(self) -> None:
+        """Validate the optional right view and its calibration as one pair.
+
+        The two views must describe the same image size, because one rectified
+        stereo pair has one row alignment and one principal point. A right view
+        without calibration, or calibration without a right view, is half a
+        pair and is rejected rather than left for a later stage to discover.
+        """
+        if self.right_rgb is None:
+            if self.stereo is not None:
+                raise ValueError("stereo calibration requires right_rgb")
+            return
+        if self.stereo is None:
+            raise ValueError("right_rgb requires a stereo calibration record")
+        right = self.right_rgb
+        if right.dtype != np.uint8 or right.ndim != 3 or right.shape[2] != 3:
+            raise ValueError("right_rgb must be a uint8 array with shape [height, width, 3]")
+        if right.shape != self.rgb.shape:
+            raise ValueError(
+                f"right_rgb shape {right.shape} must match rgb shape {self.rgb.shape}"
+            )
+        if not self.stereo.matches(self.width, self.height):
+            raise ValueError(
+                "stereo calibration describes "
+                f"{self.stereo.width}x{self.stereo.height} but the frame is "
+                f"{self.width}x{self.height}"
+            )
 
     @property
     def width(self) -> int:
@@ -130,4 +221,14 @@ class FramePacket:
             }
         if self.intrinsics is not None:
             payload["intrinsics"] = [float(value) for value in self.intrinsics]
+        if self.right_rgb is not None and self.stereo is not None:
+            payload["right_image"] = {
+                "width": int(self.right_rgb.shape[1]),
+                "height": int(self.right_rgb.shape[0]),
+                "stride_bytes": int(self.right_rgb.strides[0]),
+                "pixel_format": "RGB8",
+                "payload_encoding": "raw-rgb8",
+                "payload_bytes": int(self.right_rgb.nbytes),
+            }
+            payload["stereo"] = self.stereo.as_dict()
         return payload

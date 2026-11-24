@@ -12,6 +12,8 @@ from typing import Iterable, Protocol
 
 import numpy as np
 
+from .contracts import StereoCalibration
+
 class StreamHealth(StrEnum):
     CONNECTING = "connecting"
     HEALTHY = "healthy"
@@ -114,6 +116,12 @@ class SourceFrame:
     depth: np.ndarray | None = None
     depth_units: str | None = None
     intrinsics: tuple[float, float, float, float] | None = None
+    # Optional second view of the same capture. A stereo source fills both
+    # fields together, so one frame carries one rectified pair with one frame
+    # identity and one timestamp. One-image sources leave them as None.
+    right_image: np.ndarray | None = None
+    right_pixel_format: str = "RGB8"
+    stereo: StereoCalibration | None = None
 
 
 class FrameSource(Protocol):

@@ -2,35 +2,94 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://group27.local/schemas/frame_packet.schema.json",
   "title": "FramePacket metadata envelope",
-  "description": "Versioned, serialisation-safe metadata for one decoded RGB8 frame. In-process code passes the RGB buffer by reference; a transport attaches its variable-length binary planes separately. The optional depth and intrinsics fields carry capture hardware extras; a source without a depth sensor omits them.",
+  "description": "Versioned, serialisation-safe metadata for one decoded RGB8 frame. In-process code passes the RGB buffer by reference; a transport attaches its variable-length binary planes separately. The optional depth, intrinsics, right_image, and stereo fields carry capture hardware extras; a source without them omits them. Version 1.1 adds the optional rectified right view and its stereo calibration for selected-pair stereo depth.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "frame_id", "source_id", "capture_timestamp_ns", "timestamp_origin", "image", "quality"],
+  "required": [
+    "schema_version",
+    "frame_id",
+    "source_id",
+    "capture_timestamp_ns",
+    "timestamp_origin",
+    "image",
+    "quality"
+  ],
   "properties": {
-    "schema_version": {"const": "1.0"},
-    "frame_id": {"type": "integer", "minimum": 0},
-    "source_id": {"type": "string", "minLength": 1},
-    "capture_timestamp_ns": {"type": "integer", "minimum": 0, "description": "Monotonic-domain nanoseconds; never wall-clock ordering time."},
-    "received_timestamp_ns": {"type": "integer", "minimum": 0, "description": "Optional diagnostic monotonic timestamp."},
-    "timestamp_origin": {"type": "string", "enum": ["source_presentation", "decode_monotonic"]},
+    "schema_version": {
+      "const": "1.1",
+      "description": "Version 1.0 envelopes have no right_image or stereo fields. A reader that accepts 1.1 also accepts 1.0."
+    },
+    "frame_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capture_timestamp_ns": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic-domain nanoseconds; never wall-clock ordering time."
+    },
+    "received_timestamp_ns": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional diagnostic monotonic timestamp."
+    },
+    "timestamp_origin": {
+      "type": "string",
+      "enum": [
+        "source_presentation",
+        "decode_monotonic"
+      ]
+    },
     "image": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["width", "height", "stride_bytes", "pixel_format", "payload_encoding", "payload_bytes"],
+      "required": [
+        "width",
+        "height",
+        "stride_bytes",
+        "pixel_format",
+        "payload_encoding",
+        "payload_bytes"
+      ],
       "properties": {
-        "width": {"type": "integer", "minimum": 1},
-        "height": {"type": "integer", "minimum": 1},
-        "stride_bytes": {"type": "integer", "minimum": 3},
-        "pixel_format": {"const": "RGB8"},
-        "payload_encoding": {"const": "raw-rgb8"},
-        "payload_bytes": {"type": "integer", "minimum": 3}
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stride_bytes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "pixel_format": {
+          "const": "RGB8"
+        },
+        "payload_encoding": {
+          "const": "raw-rgb8"
+        },
+        "payload_bytes": {
+          "type": "integer",
+          "minimum": 3
+        }
       }
     },
-    "camera": {"type": "object", "description": "Optional calibrated intrinsics and distortion metadata; define its detailed schema before using it."},
+    "camera": {
+      "type": "object",
+      "description": "Optional calibrated intrinsics and distortion metadata; define its detailed schema before using it."
+    },
     "intrinsics": {
       "type": "array",
       "description": "Optional pinhole intrinsics fx, fy, cx, cy in pixels for this image size.",
-      "items": {"type": "number"},
+      "items": {
+        "type": "number"
+      },
       "minItems": 4,
       "maxItems": 4
     },
@@ -38,29 +97,170 @@
       "type": "object",
       "description": "Optional capture depth plane. The values are camera-axis distance, float32, and may contain NaN for invalid samples.",
       "additionalProperties": false,
-      "required": ["width", "height", "units", "payload_encoding", "payload_bytes"],
+      "required": [
+        "width",
+        "height",
+        "units",
+        "payload_encoding",
+        "payload_bytes"
+      ],
       "properties": {
-        "width": {"type": "integer", "minimum": 1},
-        "height": {"type": "integer", "minimum": 1},
-        "units": {"type": "string", "enum": ["millimetres", "metres"]},
-        "payload_encoding": {"const": "raw-float32"},
-        "payload_bytes": {"type": "integer", "minimum": 4},
-        "has_validity": {"type": "boolean", "description": "True when a matching float32 validity plane in [0, 1] travels with the depth plane."}
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "units": {
+          "type": "string",
+          "enum": [
+            "millimetres",
+            "metres"
+          ]
+        },
+        "payload_encoding": {
+          "const": "raw-float32"
+        },
+        "payload_bytes": {
+          "type": "integer",
+          "minimum": 4
+        },
+        "has_validity": {
+          "type": "boolean",
+          "description": "True when a matching float32 validity plane in [0, 1] travels with the depth plane."
+        }
       }
     },
     "quality": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["decode_latency_ns", "frame_age_ns", "frame_age_available", "queue_depth", "dropped_frame_count", "timestamp_status"],
+      "required": [
+        "decode_latency_ns",
+        "frame_age_ns",
+        "frame_age_available",
+        "queue_depth",
+        "dropped_frame_count",
+        "timestamp_status"
+      ],
       "properties": {
-        "decode_latency_ns": {"type": "integer", "minimum": 0},
-        "frame_age_ns": {"type": "integer", "minimum": 0},
-        "frame_age_available": {"type": "boolean", "description": "False when source presentation time is on a clock domain that cannot be compared to this process's monotonic clock."},
-        "queue_depth": {"type": "integer", "minimum": 0},
-        "dropped_frame_count": {"type": "integer", "minimum": 0},
-        "timestamp_status": {"type": "string", "enum": ["ok", "duplicate", "backwards"]},
-        "blur_flag": {"type": "boolean"},
-        "exposure_flag": {"type": "boolean"}
+        "decode_latency_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "frame_age_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "frame_age_available": {
+          "type": "boolean",
+          "description": "False when source presentation time is on a clock domain that cannot be compared to this process's monotonic clock."
+        },
+        "queue_depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dropped_frame_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timestamp_status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "duplicate",
+            "backwards"
+          ]
+        },
+        "blur_flag": {
+          "type": "boolean"
+        },
+        "exposure_flag": {
+          "type": "boolean"
+        }
+      }
+    },
+    "right_image": {
+      "type": "object",
+      "description": "Optional rectified right view of the same capture. It always travels with the envelope that carries the matching left image, one frame ID, one source ID, and one capture timestamp.",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "stride_bytes",
+        "pixel_format",
+        "payload_encoding",
+        "payload_bytes"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stride_bytes": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "pixel_format": {
+          "const": "RGB8"
+        },
+        "payload_encoding": {
+          "const": "raw-rgb8"
+        },
+        "payload_bytes": {
+          "type": "integer",
+          "minimum": 3
+        }
+      }
+    },
+    "stereo": {
+      "type": "object",
+      "description": "Optional rectified stereo calibration that describes the left and right views of this envelope. Required when right_image is present.",
+      "additionalProperties": false,
+      "required": [
+        "fx",
+        "fy",
+        "cx",
+        "cy",
+        "baseline_m",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "fx": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "fy": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "baseline_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Distance between the rectified camera centres in metres."
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Image width this calibration applies to. It must equal the image width."
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Image height this calibration applies to. It must equal the image height."
+        }
       }
     }
   }
