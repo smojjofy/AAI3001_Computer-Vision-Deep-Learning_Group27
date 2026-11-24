@@ -154,3 +154,100 @@ def test_refresh_outcome_keeps_the_exact_mask_input_joints(monkeypatch) -> None:
     assert outcome.mask_pose_joints[1]["depth_m"] is None
     # The display field keeps its rounded preview values.
     assert outcome.pose_joints == preview_joints
+
+
+def test_stereo_person_gap_retries_yolo_without_a_second_pose(monkeypatch) -> None:
+    packet = FakePacket(20, 20, (40.0, 40.0, 10.0, 10.0))
+    stereo_depth = np.full((20, 20), np.nan, np.float32)
+    stereo_depth[:, :10] = 2.0  # The background passes the whole-image check.
+    yolo_depth = np.full((20, 20), 2.0, np.float32)
+    pose = SimpleNamespace(landmarks=[SimpleNamespace(x=0.75, y=0.5, visibility=0.9)])
+
+    class FakeEstimator:
+        pose_calls = 0
+        fallback_calls = 0
+
+        def process_frame(self, rgb, frame_id, source_id, timestamp_ns, *, depth, depth_source):
+            self.pose_calls += 1
+            return SimpleNamespace(
+                detected=True, depth=SimpleNamespace(depth=depth), pose=pose,
+                joint_depth=[float("nan")], depth_source=depth_source,
+            )
+
+        def replace_depth_with_yolo(self, rgb, previous):
+            self.fallback_calls += 1
+            assert previous.pose is pose
+            return SimpleNamespace(
+                detected=True, depth=SimpleNamespace(depth=yolo_depth), pose=pose,
+                joint_depth=[2.0], depth_source="yolo",
+            )
+
+    def mask_selector(depth_m, *, pose_joints, config):
+        mask = np.zeros((20, 20), np.uint8)
+        mask[5:15, 12:18] = 1
+        return SimpleNamespace(
+            info=DepthThresholdMask(mask, np.isfinite(depth_m).astype(np.float32),
+                                    2.0, 2.0, 0.5, 0.15, 0.5),
+            source="depth_threshold_fallback", fallback_reason=None,
+            background_area_fraction=None,
+        )
+
+    monkeypatch.setattr(pipeline_module, "select_pose_gradient_mask", mask_selector)
+    monkeypatch.setattr(pipeline_module, "splat_state_payload", lambda *a, **k: ({"count": 5}, b""))
+    import modules.splat_constructor as splat_constructor
+    monkeypatch.setattr(splat_constructor, "construct_splat_state", lambda *a, **k: SimpleNamespace())
+
+    pipeline = RefreshPipeline(device="cpu", stereo_enabled=True)
+    estimator = FakeEstimator()
+    pipeline._pipeline = estimator
+    pipeline._stereo_depth_for = lambda _packet: (
+        stereo_depth, "stereo_sgbm", {"status": "used", "match_ms": 1.0}
+    )
+    outcome = pipeline.process(packet, generation=0)
+    assert estimator.pose_calls == 1
+    assert estimator.fallback_calls == 1
+    assert outcome.depth_source == "yolo"
+    assert outcome.stereo_info["fallback_reason"] == "person_fraction_below_minimum"
+
+
+def test_stereo_background_capture_uses_the_pair() -> None:
+    packet = FakePacket(8, 8)
+    depth = np.full((8, 8), 3.0, np.float32)
+
+    class FakeEstimator:
+        def process_frame(self, rgb, frame_id, source_id, timestamp_ns, *, depth, depth_source):
+            assert depth_source == "stereo_sgbm"
+            return SimpleNamespace(detected=False, depth=SimpleNamespace(depth=depth),
+                                   depth_source=depth_source)
+
+    pipeline = RefreshPipeline(device="cpu", stereo_enabled=True)
+    pipeline._pipeline = FakeEstimator()
+    pipeline._stereo_depth_for = lambda _packet: (depth, "stereo_sgbm", {"status": "used"})
+    captured, person_detected, source = pipeline.capture_background_depth(packet)
+    np.testing.assert_array_equal(captured, depth)
+    assert person_detected is False
+    assert source == "stereo_sgbm"
+
+
+def test_stereo_mask_ignores_a_baseline_from_another_depth_source(monkeypatch) -> None:
+    packet = FakePacket(8, 8)
+    depth = np.full((8, 8), 2.0, np.float32)
+    result = SimpleNamespace(
+        pose=SimpleNamespace(landmarks=[]), joint_depth=[], depth_source="stereo_sgbm"
+    )
+    selected = SimpleNamespace(info=DepthThresholdMask(
+        np.ones((8, 8), np.uint8), np.ones((8, 8), np.float32),
+        2.0, 2.0, 1.0, 1.0, 1.0,
+    ), source="depth_threshold_fallback")
+    calls = []
+    monkeypatch.setattr(pipeline_module, "select_pose_gradient_mask", lambda *a, **k: calls.append("pose") or selected)
+    monkeypatch.setattr(pipeline_module, "select_person_mask", lambda *a, **k: calls.append("baseline") or selected)
+    monkeypatch.setattr(pipeline_module, "depth_threshold_mask", lambda *a, **k: calls.append("depth_band") or selected.info)
+    pipeline = RefreshPipeline(device="cpu", stereo_enabled=True)
+    pipeline.background_baseline = SimpleNamespace(depth_source="yolo")
+    _, mismatch_selection, _ = pipeline._mask_for_result(result, depth, packet, 0)
+    assert calls == ["depth_band"]
+    assert mismatch_selection.fallback_reason == "baseline_depth_source_mismatch"
+    pipeline.background_baseline = SimpleNamespace(depth_source="stereo_sgbm")
+    pipeline._mask_for_result(result, depth, packet, 0)
+    assert calls == ["depth_band", "baseline"]

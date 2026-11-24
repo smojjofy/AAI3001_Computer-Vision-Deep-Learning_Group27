@@ -42,6 +42,20 @@ def test_baseline_freezes_the_median_background() -> None:
     assert not baseline.matches(64, 48)
 
 
+def test_calibration_keeps_one_depth_source() -> None:
+    calibration = BackgroundCalibrator()
+    depth = np.full((24, 32), 4.0, dtype=np.float32)
+    calibration.add(depth, depth_source="stereo_sgbm")
+    with pytest.raises(CalibrationError, match="depth source changed"):
+        calibration.add(depth, depth_source="yolo")
+    with pytest.raises(CalibrationError, match="does not match"):
+        calibration.build(source_id="cam", generation=3, depth_source="yolo")
+    baseline = calibration.build(source_id="cam", generation=3, depth_source="stereo_sgbm")
+    assert baseline.depth_source == "stereo_sgbm"
+    calibration.reset()
+    assert calibration.depth_source is None
+
+
 def test_invalid_pixels_are_ignored_in_the_median() -> None:
     calibrator = BackgroundCalibrator()
     for index in range(4):

@@ -224,7 +224,7 @@ def test_schema_declares_the_stereo_fields():
         (ROOT / "shared" / "schemas" / "frame_packet.schema.json").read_text(encoding="utf-8")
     )
     properties = schema["properties"]
-    assert properties["schema_version"]["const"] == "1.1"
+    assert properties["schema_version"]["enum"] == ["1.0", "1.1"]
     assert "right_image" in properties
     assert "stereo" in properties
     assert set(properties["stereo"]["required"]) == {

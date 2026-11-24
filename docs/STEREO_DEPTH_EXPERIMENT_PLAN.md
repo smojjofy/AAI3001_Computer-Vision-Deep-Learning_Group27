@@ -61,6 +61,12 @@ and [camera calibration](https://docs.stereolabs.com/docs/development/zed-sdk/mo
 
 ## Selected-pair depth and refresh
 
+**Software status:** The selected-pair matcher, whole-frame YOLO fallback,
+person-region check, source-aware background calibration, and stereo decision
+report are implemented. Live stereo remains experimental. The five-scene quality
+comparison and the capture-to-display delay gate have no accepted result. The
+ZED live application still has an unresolved native access violation.
+
 1. Run StereoSGBM only for a selected refresh pair. Convert both rectified
    images to grayscale. Divide OpenCV's fixed-point disparity by 16. For each
    valid positive disparity, calculate camera-axis depth in metres as

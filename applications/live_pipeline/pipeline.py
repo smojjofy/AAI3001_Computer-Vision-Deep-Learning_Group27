@@ -17,7 +17,7 @@ import numpy as np
 
 from .background_calibration import BackgroundBaseline
 from .camera_config import CameraConfig
-from .mask_selection import select_pose_gradient_mask
+from .mask_selection import MaskSelection, pose_region_mask, select_person_mask, select_pose_gradient_mask
 from .pose_gradient_mask import gate_validity_to_joint_depth
 from .telemetry import capture_age_ms as capture_age_ms_at, stage_total
 
@@ -223,33 +223,40 @@ class RefreshPipeline:
         """
         self.background_baseline = baseline
 
-    def capture_background_depth(self, packet, generation: int | None = None) -> tuple[np.ndarray, bool]:
+    def capture_background_depth(
+        self, packet, generation: int | None = None
+    ) -> tuple[np.ndarray, bool, str]:
         """Run pose and depth for one calibration frame.
 
-        Returns ``(depth_m, person_detected)``. Calibration runs while the scene
-        is empty, so the pose requirement does not apply, but a detected person
-        is reported so the caller can refuse to learn a person as background.
+        Returns ``(depth_m, person_detected, depth_source)``. Calibration runs
+        while the scene is empty, so the pose requirement does not apply. A
+        detected person is reported so the caller can reject that background.
         This does not build a mask or a splat state.
         """
         intrinsics = self._ensure_intrinsics(packet)
         pipeline = self._ensure_pipeline()
         depth_input = None
-        depth_units = None
-        if packet.depth is not None:
+        depth_source = None
+        if self.stereo_enabled:
+            depth_input, depth_source, stereo_info = self._stereo_depth_for(packet)
+            if depth_input is None:
+                reason = stereo_info.get("fallback_reason", "stereo_depth_unusable")
+                raise RefreshError(f"stereo calibration depth is unusable: {reason}", reason="depth_invalid")
+        elif packet.depth is not None:
             depth_input = depth_to_metres(packet.depth, packet.depth_units)
-            depth_units = "metres"
         result = pipeline.process_frame(
             packet.rgb,
             packet.frame_id,
             packet.source_id,
             packet.capture_timestamp_ns,
             depth=depth_input,
+            **({"depth_source": depth_source} if depth_source is not None else {}),
         )
         detected = bool(getattr(result, "detected", False))
         if depth_input is not None:
             # A source that already supplies depth returns that depth.
-            return np.asarray(depth_input, dtype=np.float32), detected
-        return np.asarray(result.depth.depth, dtype=np.float32), detected
+            return np.asarray(depth_input, dtype=np.float32), detected, str(result.depth_source)
+        return np.asarray(result.depth.depth, dtype=np.float32), detected, str(result.depth_source)
 
     def process(self, packet, generation: int | None = None) -> RefreshOutcome:
         """Run pose, depth, mask, and construction for one selected frame.
@@ -303,44 +310,41 @@ class RefreshPipeline:
             raise RefreshError(self.last_error, person_missing=True, reason="pose_missing")
 
         depth_m = np.asarray(result.depth.depth, dtype=np.float32)
-        pose_joints_for_mask = None
-        try:
-            joint_depths = getattr(result, "joint_depth", None)
-            pose_joints_for_mask = []
-            for index, landmark in enumerate(result.pose.landmarks):
-                depth_value = None
-                if joint_depths is not None and index < len(joint_depths):
-                    candidate = joint_depths[index]
-                    if candidate is not None and np.isfinite(candidate):
-                        depth_value = float(candidate)
-                pose_joints_for_mask.append({
-                    "index": index,
-                    "x": float(landmark.x),
-                    "y": float(landmark.y),
-                    "visibility": None if landmark.visibility is None else float(landmark.visibility),
-                    "depth_m": depth_value,
-                })
-        except (AttributeError, TypeError, ValueError):
-            pose_joints_for_mask = None
-        mask_selection = select_pose_gradient_mask(
-            depth_m,
-            pose_joints=pose_joints_for_mask,
-            config=self.mask_config,
+        pose_joints_for_mask, mask_selection, mask_info = self._mask_for_result(
+            result, depth_m, packet, job_generation
         )
-        mask_info = mask_selection.info
-        if mask_selection.source == "pose_gradient":
-            gated_validity = gate_validity_to_joint_depth(
-                mask_info.mask, depth_m, pose_joints_for_mask
+        if stereo_info is not None and stereo_info.get("status") == "used":
+            _import_depth_stack()
+            from src.pipeline import StereoFallbackConfig, stereo_frame_usable
+
+            person_region = (
+                pose_region_mask(pose_joints_for_mask, width=packet.width, height=packet.height)
+                if pose_joints_for_mask is not None else None
             )
-            mask_info = DepthThresholdMask(
-                mask=mask_info.mask,
-                validity=gated_validity,
-                near_m=mask_info.near_m,
-                far_m=mask_info.far_m,
-                valid_fraction=mask_info.valid_fraction,
-                area_fraction=mask_info.area_fraction,
-                confidence=mask_info.confidence,
-            )
+            valid = np.isfinite(depth_m) & (depth_m > 0.0)
+            if person_region is None:
+                usable, reason, detail = False, "pose_region_unavailable", {"person_pixels": 0}
+            else:
+                usable, reason, detail = stereo_frame_usable(
+                    depth_m, valid, person_mask=person_region,
+                    config=self.stereo_fallback or StereoFallbackConfig(),
+                )
+            stereo_info["person_decision"] = detail
+            if usable and not mask_info.detected:
+                usable, reason = False, "mask_rejected"
+            if not usable:
+                stereo_info.update({"status": "fallback", "fallback_reason": reason})
+                try:
+                    result = pipeline.replace_depth_with_yolo(packet.rgb, result)
+                except Exception as error:
+                    self.failure_count += 1
+                    self.last_error = f"YOLO fallback failed: {error!r}"
+                    raise RefreshError(self.last_error, reason="pose_depth_error") from error
+                t_depth = perf_counter()
+                depth_m = np.asarray(result.depth.depth, dtype=np.float32)
+                pose_joints_for_mask, mask_selection, mask_info = self._mask_for_result(
+                    result, depth_m, packet, job_generation
+                )
         if not mask_info.detected:
             self.failure_count += 1
             reason = "mask area {:.3f} outside [{:.3f}, {:.3f}]".format(
@@ -475,6 +479,58 @@ class RefreshPipeline:
             stereo_info=stereo_info if self.stereo_enabled else None,
         )
 
+    def _mask_for_result(
+        self, result, depth_m: np.ndarray, packet, generation: int
+    ) -> tuple[list[dict[str, Any]] | None, MaskSelection, DepthThresholdMask]:
+        pose_joints = None
+        try:
+            joint_depths = getattr(result, "joint_depth", None)
+            pose_joints = []
+            for index, landmark in enumerate(result.pose.landmarks):
+                depth_value = None
+                if joint_depths is not None and index < len(joint_depths):
+                    candidate = joint_depths[index]
+                    if candidate is not None and np.isfinite(candidate):
+                        depth_value = float(candidate)
+                pose_joints.append({
+                    "index": index,
+                    "x": float(landmark.x),
+                    "y": float(landmark.y),
+                    "visibility": None if landmark.visibility is None else float(landmark.visibility),
+                    "depth_m": depth_value,
+                })
+        except (AttributeError, TypeError, ValueError):
+            pose_joints = None
+
+        baseline = self.background_baseline
+        if self.stereo_enabled and baseline is not None and baseline.depth_source != result.depth_source:
+            selection = MaskSelection(
+                depth_threshold_mask(depth_m, self.mask_config),
+                "depth_threshold_fallback", "baseline_depth_source_mismatch",
+            )
+        elif self.stereo_enabled and baseline is not None:
+            selection = select_person_mask(
+                depth_m, baseline=baseline, source_id=packet.source_id,
+                generation=generation, config=self.mask_config, pose_joints=pose_joints,
+            )
+        else:
+            selection = select_pose_gradient_mask(
+                depth_m, pose_joints=pose_joints, config=self.mask_config,
+            )
+        mask_info = selection.info
+        if selection.source == "pose_gradient":
+            gated_validity = gate_validity_to_joint_depth(mask_info.mask, depth_m, pose_joints)
+            mask_info = DepthThresholdMask(
+                mask=mask_info.mask,
+                validity=gated_validity,
+                near_m=mask_info.near_m,
+                far_m=mask_info.far_m,
+                valid_fraction=mask_info.valid_fraction,
+                area_fraction=mask_info.area_fraction,
+                confidence=mask_info.confidence,
+            )
+        return pose_joints, selection, mask_info
+
     def _stereo_depth_for(
         self, packet
     ) -> tuple[np.ndarray | None, str | None, dict[str, Any]]:
@@ -484,11 +540,9 @@ class RefreshPipeline:
         caller should let the pipeline estimate depth with YOLO, and
         ``info["fallback_reason"]`` says why.
 
-        The frame is matched without a person mask, because the mask needs a
-        depth map and the plan forbids mixing the two sources. The plan's
-        requirement is therefore met at the whole-frame level only: the person
-        share is checked after the mask exists, and a frame whose person region
-        is mostly unmatched is reported rather than silently published.
+        The frame is matched before the person region is known. ``process``
+        checks that region after pose and mask selection. It retries with YOLO
+        depth for the whole frame if that later check fails.
         """
         info: dict[str, Any] = {"status": "not_attempted"}
         right = getattr(packet, "right_rgb", None)
@@ -518,7 +572,7 @@ class RefreshPipeline:
                 config=matcher_config,
             )
         except Exception as error:  # a match fault must not stop the live run
-            info.update({"status": "fallback", "fallback_reason": f"match_error: {error!r}"})
+            info.update({"status": "fallback", "fallback_reason": "match_error", "error": repr(error)})
             return None, None, info
         elapsed_ms = (perf_counter() - started) * 1000.0
         valid = np.isfinite(depth) & (depth > 0.0)
@@ -532,12 +586,6 @@ class RefreshPipeline:
                 "decision": detail,
             }
         )
-        if not usable:
-            info["fallback_reason"] = reason
-            return None, None, info
-        return depth, "stereo_sgbm", info
-        info.update({"status": "used" if usable else "fallback", "match_ms": round(elapsed_ms, 3),
-                     "match": match_info, "decision": detail})
         if not usable:
             info["fallback_reason"] = reason
             return None, None, info

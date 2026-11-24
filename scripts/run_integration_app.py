@@ -438,7 +438,7 @@ def main() -> None:
     latency_samples: list[float] = []
     capture_age_samples: list[float] = []
     splat_samples: list[int] = []
-    latest: dict[str, object] = {"decision": None, "outcome_header": None, "last_error": None}
+    latest: dict[str, object] = {"decision": None, "outcome_header": None, "stereo_info": None, "last_error": None}
     lock = threading.Lock()
 
     def advance_generation(reason: str) -> None:
@@ -470,6 +470,7 @@ def main() -> None:
         pipeline.set_background_baseline(None)
         with lock:
             latest["outcome_header"] = None
+            latest["stereo_info"] = None
             latest["last_error"] = None
             latest["decision"] = None
         drained = drain_queue(handler.queue)
@@ -490,6 +491,7 @@ def main() -> None:
         with lock:
             decision = latest["decision"]
             header = latest["outcome_header"]
+            stereo_info = latest["stereo_info"]
             last_error = latest["last_error"]
         active_capture = selector.active_state_capture_ns
         last_capture = latest.get("last_capture_ns")
@@ -518,6 +520,7 @@ def main() -> None:
                     "capture_age_ms": header.get("capture_age_ms"),
                     "mask": header.get("mask"),
                     "depth_source": header.get("depth_source"),
+                    "stereo": stereo_info,
                     "pose_confidence": header.get("pose_confidence"),
                     "person_detected": header.get("person_detected"),
                 },
@@ -553,7 +556,9 @@ def main() -> None:
         seconds = float(request.get("seconds") or 2.0)
         elapsed = time.monotonic() - float(requested_at)
         try:
-            depth_m, person_detected = pipeline.capture_background_depth(job.packet, generation=job_generation)
+            depth_m, person_detected, depth_source = pipeline.capture_background_depth(
+                job.packet, generation=job_generation
+            )
             if person_detected:
                 # Never learn a person as background. Stop and report instead of
                 # collecting a bad baseline.
@@ -566,7 +571,7 @@ def main() -> None:
                 )
                 publish_diagnostics()
                 return
-            calibration.add(depth_m)
+            calibration.add(depth_m, depth_source=depth_source)
             state.record_calibration_frame(calibration.count)
             if elapsed < seconds and calibration.count < 20:
                 publish_diagnostics()
@@ -576,6 +581,7 @@ def main() -> None:
             baseline = calibration.build(
                 source_id=job.packet.source_id,
                 generation=job_generation,
+                depth_source=depth_source,
             )
         except (CalibrationError, RuntimeError) as error:
             calibration.reset()
@@ -697,8 +703,15 @@ def main() -> None:
             )
             with lock:
                 latest["outcome_header"] = outcome.header
+                latest["stereo_info"] = outcome.stereo_info
                 latest["last_error"] = None
             counters["refresh_published"] += 1
+            if outcome.stereo_info is not None:
+                stereo_status = str(outcome.stereo_info.get("status", "unknown"))
+                counters[f"stereo_{stereo_status}"] += 1
+                if stereo_status == "fallback":
+                    reason = str(outcome.stereo_info.get("fallback_reason", "unknown"))
+                    counters[f"stereo_fallback_{reason}"] += 1
             latency_samples.append(float(outcome.timings_ms["total"]))
             if outcome.capture_age_ms is not None:
                 capture_age_samples.append(float(outcome.capture_age_ms))
@@ -713,6 +726,7 @@ def main() -> None:
                         "mask_area": round(float(outcome.mask.area_fraction), 3),
                         "mask_source": outcome.header.get("mask", {}).get("source"),
                         "bg_area": outcome.header.get("mask", {}).get("background_area_fraction"),
+                        "stereo": outcome.stereo_info,
                     }
                 ),
                 flush=True,
@@ -901,6 +915,15 @@ def main() -> None:
             if key.startswith("refresh_failed_") and key != "refresh_failed"
         },
         "refresh_failure_samples": failure_log[:40],
+        "stereo_decisions": {
+            "used": counters["stereo_used"],
+            "fallback": counters["stereo_fallback"],
+            "fallback_reasons": {
+                key.removeprefix("stereo_fallback_"): int(count)
+                for key, count in sorted(counters.items())
+                if key.startswith("stereo_fallback_")
+            },
+        },
         "latency_ms": summarize_ms(latency_samples),
         # The first refresh after model load includes warm-up and is not a
         # steady-state latency sample.

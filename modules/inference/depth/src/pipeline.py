@@ -25,6 +25,7 @@ ZED frames:
 """
 
 import sys
+from types import SimpleNamespace
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -280,6 +281,35 @@ class PoseDepthPipeline:
         timings = {"pose": (t1 - t0) * 1000, "depth": (t2 - t1) * 1000,
                    "fuse": (t3 - t2) * 1000, "total": (t3 - t0) * 1000}
         return PipelineResult(frame=fused, depth_source=source, timings_ms=timings, joint_xyz=xyz)
+
+    def replace_depth_with_yolo(
+        self, rgb_frame: np.ndarray, previous: PipelineResult
+    ) -> PipelineResult:
+        """Estimate YOLO depth for the same frame and keep its first pose result."""
+        if self._pose is None:
+            raise RuntimeError("this PoseDepthPipeline was closed")
+        if (rgb_frame.ndim != 3 or rgb_frame.shape[2] != 3
+                or rgb_frame.dtype != np.uint8
+                or rgb_frame.shape[:2] != previous.depth.shape):
+            raise ValueError("rgb_frame must match the previous RGB8 frame size")
+        identity = {
+            "frame_id": previous.frame_id,
+            "source_id": previous.source_id,
+            "capture_timestamp_ns": previous.capture_timestamp_ns,
+        }
+        started = perf_counter()
+        depth_frame = self.depth_estimator.estimate_frame(np.ascontiguousarray(rgb_frame), **identity)
+        pose_frame = SimpleNamespace(**identity, pose=previous.pose)
+        fused = fuse_pose_depth(
+            pose_frame, depth_frame,
+            radius=self.joint_radius, min_visibility=self.min_visibility,
+        )
+        xyz = joints_to_xyz(fused, self.intrinsics) if self.intrinsics is not None else None
+        added_ms = (perf_counter() - started) * 1000.0
+        timings = dict(previous.timings_ms)
+        timings["fallback_yolo"] = added_ms
+        timings["total"] = float(timings.get("total", 0.0)) + added_ms
+        return PipelineResult(frame=fused, depth_source="yolo", timings_ms=timings, joint_xyz=xyz)
 
     def close(self) -> None:
         for part in (self._pose, self._depth):

@@ -16,7 +16,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "1.1",
+      "enum": ["1.0", "1.1"],
       "description": "Version 1.0 envelopes have no right_image or stereo fields. A reader that accepts 1.1 also accepts 1.0."
     },
     "frame_id": {

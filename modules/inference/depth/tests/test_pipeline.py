@@ -81,6 +81,20 @@ def test_zed_depth_skips_yolo():
     assert np.allclose(out.joint_depth, 1.0)                     # joints are on the 1 m half
 
 
+def test_stereo_fallback_keeps_the_first_pose():
+    pose = FakePose(x=0.25)
+    yolo = FakeYolo()
+    pipe = PoseDepthPipeline(pose_estimator=pose, depth_estimator=yolo)
+    first = pipe.process_frame(frame(), 7, "zed-left", 123, depth=halves(), depth_source="stereo_sgbm")
+    fallback = pipe.replace_depth_with_yolo(frame(), first)
+    assert pose.calls == 1
+    assert yolo.calls == 1
+    assert fallback.pose is first.pose
+    assert fallback.depth_source == "yolo"
+    assert np.allclose(fallback.joint_depth, 2.0)
+    assert (fallback.frame_id, fallback.source_id, fallback.capture_timestamp_ns) == (7, "zed-left", 123)
+
+
 def test_yolo_is_only_loaded_when_needed(monkeypatch):
     pipe = PoseDepthPipeline(pose_estimator=FakePose())          # no depth estimator given
     monkeypatch.setattr("src.yolo_depth.YoloDepthEstimator",

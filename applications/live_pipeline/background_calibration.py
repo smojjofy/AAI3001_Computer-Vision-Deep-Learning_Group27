@@ -42,6 +42,7 @@ class BackgroundBaseline:
     median_depth_m: float
     p05_depth_m: float
     p95_depth_m: float
+    depth_source: str = "yolo"
 
     def matches(self, width: int, height: int) -> bool:
         """True when this baseline applies to a frame of this size."""
@@ -58,6 +59,7 @@ class BackgroundBaseline:
             "median_depth_m": round(self.median_depth_m, 3),
             "p05_depth_m": round(self.p05_depth_m, 3),
             "p95_depth_m": round(self.p95_depth_m, 3),
+            "depth_source": self.depth_source,
         }
 
 
@@ -72,16 +74,21 @@ class BackgroundCalibrator:
     min_valid_fraction: float = 0.5
     max_spread_m: float = 3.0
     frames: list[np.ndarray] = field(default_factory=list)
+    depth_source: str | None = None
 
     def reset(self) -> None:
         self.frames = []
+        self.depth_source = None
 
-    def add(self, depth_m: np.ndarray) -> None:
+    def add(self, depth_m: np.ndarray, *, depth_source: str = "yolo") -> None:
         depth = np.asarray(depth_m, dtype=np.float32)
         if depth.ndim != 2:
             raise CalibrationError("depth must be a 2-D array")
         if self.frames and depth.shape != self.frames[0].shape:
             raise CalibrationError("depth size changed during calibration")
+        if self.frames and depth_source != self.depth_source:
+            raise CalibrationError("depth source changed during calibration")
+        self.depth_source = str(depth_source)
         self.frames.append(depth)
 
     @property
@@ -93,6 +100,7 @@ class BackgroundCalibrator:
         *,
         source_id: str,
         generation: int,
+        depth_source: str = "yolo",
         valid_ratio: float = 0.5,
     ) -> BackgroundBaseline:
         """Combine the captured frames into one baseline.
@@ -103,6 +111,8 @@ class BackgroundCalibrator:
         """
         if not self.frames:
             raise CalibrationError("no frames were captured")
+        if depth_source != self.depth_source:
+            raise CalibrationError("baseline depth source does not match captured frames")
         stack = np.stack(self.frames, axis=0)
         valid = np.isfinite(stack) & (stack > 0.0)
         per_pixel_valid = valid.mean(axis=0)
@@ -139,6 +149,7 @@ class BackgroundCalibrator:
             median_depth_m=float(np.median(values)),
             p05_depth_m=p05,
             p95_depth_m=p95,
+            depth_source=str(depth_source),
         )
 
 

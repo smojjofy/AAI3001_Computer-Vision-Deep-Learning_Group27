@@ -1,5 +1,12 @@
 # Scripts
 
+## Stereo review fixes
+
+- [x] Use person-region coverage and retry a failed stereo mask with whole-frame YOLO depth without a second pose estimate.
+- [x] Publish stereo match and fallback reasons in the live refresh report.
+- [x] Accept version 1.0 frame metadata in the version 1.1 reader schema.
+- [x] Capture and apply a background baseline only with the same depth source.
+
 ## Optional environment compositor
 
 - [x] Keep the displayed splat visible while the next buffer sorts, and hold it across a pipeline generation change until a new state is ready.
