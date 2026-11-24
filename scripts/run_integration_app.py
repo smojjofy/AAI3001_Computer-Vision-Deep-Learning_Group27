@@ -43,6 +43,10 @@ sys.path[:0] = [
     str(ROOT / "modules/stream_handler/src"),
     str(ROOT / "modules/inference/optical_flow/src"),
     str(ROOT / "modules/reranker/src"),
+    # The depth inference package is imported as ``src`` by the live pipeline
+    # when it needs the stereo matcher. Adding it once here keeps that import
+    # from depending on the order the clip is imported in.
+    str(ROOT / "modules/inference/depth"),
 ]
 
 from backend.pipeline_server import PipelineServer, PipelineState  # noqa: E402
@@ -104,6 +108,7 @@ def build_source(args):
             resolution=args.zed_resolution,
             fps=args.zed_fps,
             depth_mode=args.zed_depth_mode,
+            emit_right=bool(getattr(args, "stereo_depth", False)),
         )
     capture_size = None
     if args.capture_width > 0 and args.capture_height > 0:
@@ -155,6 +160,22 @@ def main() -> None:
             "and NEURAL_PLUS build a TensorRT engine on first use; that build can "
             "run for many minutes and it happens before the first frame."
         ),
+    )
+    parser.add_argument(
+        "--stereo-depth",
+        action="store_true",
+        help=(
+            "EXPERIMENTAL. Match the rectified stereo pair with StereoSGBM on each "
+            "selected refresh frame instead of using YOLO depth. Needs --source zed "
+            "with --zed-depth-mode NONE. The published depth source becomes "
+            "stereo_sgbm; a frame whose match is unusable falls back to the "
+            "whole-frame YOLO estimate and the reason is recorded. Off by default."
+        ),
+    )
+    parser.add_argument(
+        "--stereo-half-resolution",
+        action="store_true",
+        help="EXPERIMENTAL. Match the stereo pair at half resolution. Needs --stereo-depth.",
     )
     parser.add_argument(
         "--list-zed",
@@ -319,7 +340,26 @@ def main() -> None:
         device=args.device_inference,
         require_pose=not args.allow_missing_pose,
         generation=run_guard.generation,
+        stereo_enabled=bool(getattr(args, "stereo_depth", False)),
     )
+    if args.stereo_depth:
+        # The experimental stereo path needs a pair. Refuse a configuration that
+        # cannot produce one instead of silently publishing YOLO depth under a
+        # stereo run.
+        if args.source != "zed":
+            raise SystemExit("--stereo-depth needs --source zed")
+        if args.zed_depth_mode != "NONE":
+            raise SystemExit(
+                "--stereo-depth needs --zed-depth-mode NONE: the SDK depth path "
+                "would already spend the time the matcher is meant to replace"
+            )
+        from src.pipeline import StereoFallbackConfig
+        from src.stereo_depth import StereoMatcherConfig
+
+        pipeline.stereo_config = StereoMatcherConfig(
+            resolution_divisor=2 if args.stereo_half_resolution else 1
+        )
+        pipeline.stereo_fallback = StereoFallbackConfig()
     # Face depth correction. Off by default, so a normal run is unchanged.
     face_depth_rule = None
     face_depth_log = None

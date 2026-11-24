@@ -100,6 +100,9 @@ class RefreshOutcome:
     # Face depth correction. ``face_depth_info`` is None when no rule ran.
     face_depth_info: dict[str, Any] | None = None
     face_depth_timings_ms: dict[str, float] = field(default_factory=dict)
+    # Stereo matching record for this frame. None when stereo was not enabled,
+    # otherwise it holds the match decision and, on a fallback, the reason.
+    stereo_info: dict[str, Any] | None = None
 
     @property
     def splat_count(self) -> int:
@@ -141,6 +144,13 @@ class RefreshPipeline:
     # construction, and it changes only finite, positive, already-valid pixels
     # inside the person mask.
     face_depth_rule: Any = None
+    # Stereo depth matching, off by default. It needs a packet that carries a
+    # rectified right view and a stereo calibration. When the frame keeps the
+    # match, the published depth source is `stereo_sgbm`; when the match is
+    # unusable the whole frame uses the YOLO estimate and the reason is recorded.
+    stereo_enabled: bool = False
+    stereo_config: Any = None
+    stereo_fallback: Any = None
     _pipeline: Any = field(default=None, init=False, repr=False)
     _intrinsics: tuple[float, float, float, float] | None = field(default=None, init=False, repr=False)
     _intrinsics_key: tuple[int, int, tuple[float, float, float, float] | None] | None = field(
@@ -255,16 +265,29 @@ class RefreshPipeline:
         pipeline = self._ensure_pipeline()
         depth_input = None
         depth_units = None
+        supplied_source = None
+        stereo_info: dict[str, Any] | None = None
         if packet.depth is not None:
             depth_input = depth_to_metres(packet.depth, packet.depth_units)
             depth_units = "metres"
+        elif self.stereo_enabled:
+            # Stereo replaces the supplied depth with a match from this pair.
+            # The decision is whole-frame: either this frame keeps the match, or
+            # it uses the YOLO estimate, never a mix of the two.
+            depth_input, supplied_source, stereo_info = self._stereo_depth_for(packet)
         try:
+            process_kwargs: dict[str, Any] = {"depth": depth_input}
+            if supplied_source is not None:
+                # Only a caller that names a source passes the keyword, so a
+                # depth stack or a test double with the older signature still
+                # works and keeps its historical label.
+                process_kwargs["depth_source"] = supplied_source
             result = pipeline.process_frame(
                 packet.rgb,
                 packet.frame_id,
                 packet.source_id,
                 packet.capture_timestamp_ns,
-                depth=depth_input,
+                **process_kwargs,
             )
         except Exception as error:  # the caller keeps the active state
             self.failure_count += 1
@@ -449,7 +472,76 @@ class RefreshPipeline:
             depth_source=str(result.depth_source),
             face_depth_info=face_depth_info,
             face_depth_timings_ms=face_depth_timings,
+            stereo_info=stereo_info if self.stereo_enabled else None,
         )
+
+    def _stereo_depth_for(
+        self, packet
+    ) -> tuple[np.ndarray | None, str | None, dict[str, Any]]:
+        """Match this packet's pair, or decide that the frame uses YOLO depth.
+
+        Returns ``(depth_m, source_label, info)``. A ``None`` depth means the
+        caller should let the pipeline estimate depth with YOLO, and
+        ``info["fallback_reason"]`` says why.
+
+        The frame is matched without a person mask, because the mask needs a
+        depth map and the plan forbids mixing the two sources. The plan's
+        requirement is therefore met at the whole-frame level only: the person
+        share is checked after the mask exists, and a frame whose person region
+        is mostly unmatched is reported rather than silently published.
+        """
+        info: dict[str, Any] = {"status": "not_attempted"}
+        right = getattr(packet, "right_rgb", None)
+        calibration = getattr(packet, "stereo", None)
+        if right is None or calibration is None:
+            info.update({"status": "fallback", "fallback_reason": "no_stereo_pair"})
+            return None, None, info
+        if not calibration.matches(packet.width, packet.height):
+            info.update({"status": "fallback", "fallback_reason": "calibration_size_mismatch"})
+            return None, None, info
+        # The depth package is imported lazily, matching how the pose and depth
+        # stack is loaded: the package is used without being installed, so its
+        # parent directory is only on sys.path after _import_depth_stack runs.
+        _import_depth_stack()
+        from src.pipeline import StereoFallbackConfig
+        from src.pipeline import stereo_frame_usable
+        from src.stereo_depth import StereoMatcherConfig, stereo_depth
+
+        matcher_config = self.stereo_config if self.stereo_config is not None else StereoMatcherConfig()
+        started = perf_counter()
+        try:
+            depth, match_info = stereo_depth(
+                packet.rgb,
+                right,
+                fx=calibration.fx,
+                baseline_m=calibration.baseline_m,
+                config=matcher_config,
+            )
+        except Exception as error:  # a match fault must not stop the live run
+            info.update({"status": "fallback", "fallback_reason": f"match_error: {error!r}"})
+            return None, None, info
+        elapsed_ms = (perf_counter() - started) * 1000.0
+        valid = np.isfinite(depth) & (depth > 0.0)
+        fallback_config = self.stereo_fallback if self.stereo_fallback is not None else StereoFallbackConfig()
+        usable, reason, detail = stereo_frame_usable(depth, valid, config=fallback_config)
+        info.update(
+            {
+                "status": "used" if usable else "fallback",
+                "match_ms": round(elapsed_ms, 3),
+                "match": match_info,
+                "decision": detail,
+            }
+        )
+        if not usable:
+            info["fallback_reason"] = reason
+            return None, None, info
+        return depth, "stereo_sgbm", info
+        info.update({"status": "used" if usable else "fallback", "match_ms": round(elapsed_ms, 3),
+                     "match": match_info, "decision": detail})
+        if not usable:
+            info["fallback_reason"] = reason
+            return None, None, info
+        return depth, "stereo_sgbm", info
 
     def _correct_face_depth(
         self,
