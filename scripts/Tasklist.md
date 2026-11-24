@@ -2,7 +2,7 @@
 
 ## Optional environment compositor
 
-- [ ] Keep the displayed splat visible while the next buffer sorts, and hold it across a pipeline generation change until a new state is ready.
+- [x] Keep the displayed splat visible while the next buffer sorts, and hold it across a pipeline generation change until a new state is ready.
 - [x] Add a browser-only Three.js view that imports one local GLB environment and shows the current published splat state in the same camera.
 - [x] Keep the existing live splat panel as the default. Bound replacement work to the newest frame and release viewer resources when the optional view closes.
 - [ ] Verify frame conversion, a local opaque GLB import, camera alignment, and close/reopen behavior.

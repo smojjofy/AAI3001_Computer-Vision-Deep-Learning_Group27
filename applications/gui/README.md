@@ -36,7 +36,10 @@ The splat state is fetched only when `/api/diagnostics` reports a new
 Use **Environment compositor** in the top bar to open the optional 3D view.
 Import one self-contained `.glb` file of 30 MB or less. The browser keeps the
 file local. The view uses the same published splat frames as the default panel.
-It replaces old splat data with the newest frame after each update completes.
+One splat viewer stays visible while a second viewer sorts the newest frame.
+The view swaps them only after the new splat buffer is ready. A source or
+generation change holds the last drawn splat until the next state is ready.
+The status text identifies a held frame. Close the view to clear that frame.
 The default panel continues to run when the compositor is closed.
 
 The imported model is centered and its longest side is set to 4 m. Use the

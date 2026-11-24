@@ -5,6 +5,7 @@ import { SceneRevealMode, SplatLoader, Viewer } from '@mkkellogg/gaussian-splats
 
 import type { SplatFrame } from '../api/types'
 import { encodeEnvironmentSplat } from './environmentSplat'
+import { mayPresentPreparedFrame } from './environmentFramePolicy'
 
 const MAX_GLB_BYTES = 30 * 1024 * 1024
 
@@ -58,7 +59,10 @@ export class EnvironmentCompositor {
   private camera = new THREE.PerspectiveCamera(60, 1, 0.05, 100)
   private renderer: THREE.WebGLRenderer | null = null
   private controls: OrbitControls | null = null
-  private viewer: Viewer | null = null
+  /** The inactive viewer sorts the next frame while the active viewer stays visible. */
+  private viewers: [Viewer, Viewer] | null = null
+  private activeViewer: Viewer | null = null
+  private activeIdentity: { sourceId: string; generation: number; frameId: string } | null = null
   private environment: THREE.Object3D | null = null
   private environmentBaseScale = 1
   private latestFrame: SplatFrame | null = null
@@ -67,7 +71,7 @@ export class EnvironmentCompositor {
   private closeTask: Promise<void> | null = null
   private resizeObserver: ResizeObserver | null = null
   private animationFrame = 0
-  private splatReady = false
+  private stateEpoch = 0
   private visible = false
   private session = 0
   private importSerial = 0
@@ -118,7 +122,8 @@ export class EnvironmentCompositor {
     if (this.closeTask) await this.closeTask
     if (this.visible) return
     this.visible = true
-    this.splatReady = false
+    this.activeViewer = null
+    this.activeIdentity = null
     const session = ++this.session
     this.dialog.hidden = false
     this.status.textContent = 'Preparing the compositor...'
@@ -142,19 +147,20 @@ export class EnvironmentCompositor {
       this.resizeObserver = new ResizeObserver(() => this.resize())
       this.resizeObserver.observe(this.viewport)
       this.resize()
-      this.viewer = new Viewer({
+      const viewerOptions = {
         rootElement: this.viewport,
         threeScene: this.scene,
         renderer: this.renderer,
         camera: this.camera,
-        selfDrivenMode: false,
-        useBuiltInControls: false,
-        sharedMemoryForWorkers: false,
-        gpuAcceleratedSort: false,
-        dynamicScene: true,
-        ignoreDevicePixelRatio: true,
+        selfDrivenMode: false as const,
+        useBuiltInControls: false as const,
+        sharedMemoryForWorkers: false as const,
+        gpuAcceleratedSort: false as const,
+        dynamicScene: true as const,
+        ignoreDevicePixelRatio: true as const,
         sceneRevealMode: SceneRevealMode.Instant,
-      })
+      }
+      this.viewers = [new Viewer(viewerOptions), new Viewer(viewerOptions)]
       this.pendingFrame = this.latestFrame
       if (this.pendingFrame) this.startFrameWork()
       this.status.textContent = 'Import an opaque GLB environment. Live splats will update here.'
@@ -169,13 +175,14 @@ export class EnvironmentCompositor {
     if (!this.visible) return
     this.visible = false
     ++this.session
+    ++this.stateEpoch
     ++this.importSerial
     this.dialog.hidden = true
     cancelAnimationFrame(this.animationFrame)
     this.resizeObserver?.disconnect()
     this.resizeObserver = null
     this.pendingFrame = null
-    const viewer = this.viewer
+    const viewers = this.viewers
     const renderer = this.renderer
     const controls = this.controls
     const environment = this.environment
@@ -183,14 +190,16 @@ export class EnvironmentCompositor {
     this.closeTask = (async () => {
       try {
         if (task) await task
-        if (viewer) await viewer.dispose()
+        if (viewers) await Promise.all(viewers.map((viewer) => viewer.dispose()))
       } finally {
         controls?.dispose()
         if (environment) disposeObject(environment)
         disposeObject(this.stage)
         renderer?.dispose()
         renderer?.domElement.remove()
-        if (this.viewer === viewer) this.viewer = null
+        if (this.viewers === viewers) this.viewers = null
+        this.activeViewer = null
+        this.activeIdentity = null
         if (this.renderer === renderer) this.renderer = null
         if (this.controls === controls) this.controls = null
         this.environment = null
@@ -200,29 +209,24 @@ export class EnvironmentCompositor {
 
   setSplatFrame(frame: SplatFrame): void {
     this.latestFrame = frame
-    const fy = Number(frame.header.intrinsics?.[1])
-    const cy = Number(frame.header.intrinsics?.[3])
-    const height = Number(frame.header.image_height ?? (2 * cy + 1))
-    if (Number.isFinite(fy) && fy > 0 && Number.isFinite(height) && height > 0) {
-      const fov = 2 * Math.atan(height / (2 * fy)) * 180 / Math.PI
-      if (fov >= 10 && fov <= 140) {
-        this.camera.fov = fov
-        this.camera.updateProjectionMatrix()
-      }
-    }
     if (!this.visible) return
     this.pendingFrame = frame
     this.startFrameWork()
   }
 
-  clearState(): void {
-    this.latestFrame = null
+  /** A new capture generation does not erase the last drawn composite. */
+  holdState(): void {
+    ++this.stateEpoch
     this.pendingFrame = null
-    if (this.visible) this.close()
+    if (this.visible) {
+      this.status.textContent = this.activeIdentity
+        ? `Holding ${this.activeIdentity.sourceId} frame ${this.activeIdentity.frameId} from generation ${this.activeIdentity.generation}`
+        : 'Waiting for a new splat frame.'
+    }
   }
 
   private startFrameWork(): void {
-    if (this.processingTask || !this.viewer || !this.visible) return
+    if (this.processingTask || !this.viewers || !this.visible) return
     this.processingTask = this.processFrames().finally(() => {
       this.processingTask = null
       if (this.pendingFrame && this.visible) this.startFrameWork()
@@ -230,21 +234,50 @@ export class EnvironmentCompositor {
   }
 
   private async processFrames(): Promise<void> {
-    const viewer = this.viewer!
     while (this.visible && this.pendingFrame) {
       const frame = this.pendingFrame
       this.pendingFrame = null
+      const stateEpoch = this.stateEpoch
+      const viewers = this.viewers!
+      const nextViewer = this.activeViewer === viewers[0] ? viewers[1] : viewers[0]
       try {
         const data = encodeEnvironmentSplat(frame)
         const splatBuffer = await SplatLoader.loadFromFileData(data, 1, 0, false)
-        if (!this.visible || viewer !== this.viewer) return
-        this.splatReady = false
-        await viewer.addSplatBuffers([splatBuffer], [{}], true, false, false, true)
-        this.splatReady = true
+        if (!this.visible || viewers !== this.viewers) return
+        await nextViewer.addSplatBuffers([splatBuffer], [{}], true, false, false, true)
+        if (!this.visible || viewers !== this.viewers) return
+        // Keep drawing the old viewer until this viewer finishes its first sort.
+        // A later browser event can queue a frame while addSplatBuffers awaits.
+        const pending = this.pendingFrame as SplatFrame | null
+        if (!mayPresentPreparedFrame(
+          { sourceId: frame.header.source_id, generation: Number(frame.header.generation ?? 0) },
+          pending && { sourceId: pending.header.source_id, generation: Number(pending.header.generation ?? 0) },
+          stateEpoch,
+          this.stateEpoch,
+        )) continue
+        this.applyCaptureFov(frame)
+        this.activeViewer = nextViewer
+        this.activeIdentity = {
+          sourceId: frame.header.source_id,
+          generation: Number(frame.header.generation ?? 0),
+          frameId: frame.header.frame_id,
+        }
         if (this.visible) this.status.textContent = `Splat frame ${frame.header.frame_id} · ${frame.header.count} splats`
       } catch (error) {
         if (this.visible) this.status.textContent = `Splat update failed: ${String(error)}`
       }
+    }
+  }
+
+  private applyCaptureFov(frame: SplatFrame): void {
+    const fy = Number(frame.header.intrinsics?.[1])
+    const cy = Number(frame.header.intrinsics?.[3])
+    const height = Number(frame.header.image_height ?? (2 * cy + 1))
+    if (!Number.isFinite(fy) || fy <= 0 || !Number.isFinite(height) || height <= 0) return
+    const fov = 2 * Math.atan(height / (2 * fy)) * 180 / Math.PI
+    if (fov >= 10 && fov <= 140) {
+      this.camera.fov = fov
+      this.camera.updateProjectionMatrix()
     }
   }
 
@@ -339,11 +372,11 @@ export class EnvironmentCompositor {
   }
 
   private draw(session: number): void {
-    if (!this.visible || session !== this.session || !this.renderer || !this.viewer) return
+    if (!this.visible || session !== this.session || !this.renderer || !this.viewers) return
     this.controls?.update()
-    this.viewer.update()
+    this.activeViewer?.update()
     this.renderer.clear()
-    if (this.splatReady) this.viewer.render()
+    if (this.activeViewer) this.activeViewer.render()
     else this.renderer.render(this.scene, this.camera)
     this.animationFrame = requestAnimationFrame(() => this.draw(session))
   }

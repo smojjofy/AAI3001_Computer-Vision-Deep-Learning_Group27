@@ -347,8 +347,7 @@ function clearDisplayedState(): void {
   maskRetryTimer = null
   poseDepthRetryTimer = null
   splatOutputPanel.clearState()
-  latestEnvironmentFrame = null
-  environmentCompositor?.clearState()
+  environmentCompositor?.holdState()
   frameProcessorPanel.setMaskImage(null, null)
   frameProcessorPanel.setDepthFrame(null, null)
   frameProcessorPanel.setMotion(null)
