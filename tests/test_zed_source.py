@@ -155,9 +155,13 @@ def _source_with_depth(zed_module, depth_mm: np.ndarray):
             self.colour_view = fake.VIEW.LEFT
             # DEPTH_MODE.NONE sets this to False, and then read() reports no depth.
             self.depth_enabled = bool(depth_enabled)
+            # This fixture exercises the one-image path, so no right view.
+            self.emit_right = False
             self._zed = fake
             self._image_mat = fake.Mat()
+            self._right_mat = None
             self._depth_mat = fake.Mat()
+            self._stereo = None
             self._runtime = fake.RuntimeParameters()
             self._intrinsics = None
             self._opened = False

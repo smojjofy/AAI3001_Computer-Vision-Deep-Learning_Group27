@@ -329,6 +329,12 @@ class ZedCameraSource:
     failure cases, so this source maps every non-finite, zero, or negative
     value to ``NaN`` before it leaves the source. A caller in metres then needs
     no special case.
+
+    Stereo capture: with ``DEPTH_MODE.NONE`` and ``emit_right=True`` the source
+    retrieves the rectified right view of the same grab and attaches the
+    rectified stereo calibration, so one frame carries one pair for an external
+    matching stage. The right view is never requested while the SDK computes
+    depth, because that path already spends the GPU time the pair would replace.
     """
 
     #: Depth reaches the packet in metres, matching the project convention.
@@ -343,6 +349,7 @@ class ZedCameraSource:
         fps: int = 30,
         depth_mode: str = "QUALITY",
         colour_view: str = "LEFT",
+        emit_right: bool = False,
     ) -> None:
         self._sl = _load_zed_sdk()
         self.source_id = source_id or f"zed:{camera_id}"
@@ -369,6 +376,14 @@ class ZedCameraSource:
         # module is not requested from the SDK, so `depth` stays None and a
         # downstream model can supply depth for the selected frames only.
         self.depth_enabled = self._depth_mode_name != "NONE"
+        # A right view is only useful when the SDK is not already producing
+        # depth, and asking for it costs a buffer copy per frame.
+        self.emit_right = bool(emit_right) and not self.depth_enabled
+        if emit_right and self.depth_enabled:
+            raise ValueError(
+                "emit_right requires depth_mode NONE; the SDK depth path already "
+                "computes depth from the pair"
+            )
         try:
             self.colour_view = getattr(self._sl.VIEW, self._colour_view_name)
         except AttributeError as error:
@@ -376,9 +391,11 @@ class ZedCameraSource:
 
         self._zed = self._sl.Camera()
         self._image_mat = self._sl.Mat()
+        self._right_mat = self._sl.Mat() if self.emit_right else None
         self._depth_mat = self._sl.Mat()
         self._runtime = self._sl.RuntimeParameters()
         self._intrinsics: tuple[float, float, float, float] | None = None
+        self._stereo: StereoCalibration | None = None
         self._opened = False
 
     def open(self) -> None:
@@ -396,7 +413,45 @@ class ZedCameraSource:
         # Intrinsics must be read after a successful open; before that the call
         # returns an empty configuration.
         self._intrinsics = self._read_intrinsics()
+        if self.emit_right:
+            self._stereo = self._read_stereo_calibration()
         self._opened = True
+
+    def _read_stereo_calibration(self) -> StereoCalibration:
+        """Read the rectified stereo calibration for the active resolution.
+
+        The plan requires a real baseline, so a missing, non-finite, or
+        non-positive calibration stops the source instead of falling back to an
+        estimate. The baseline arrives in millimetres because the camera opened
+        with ``UNIT.MILLIMETER``, and it is converted to metres here.
+        """
+        try:
+            configuration = self._zed.get_camera_information().camera_configuration
+            calibration = configuration.calibration_parameters
+            left = calibration.left_cam
+            baseline_mm = float(calibration.get_camera_baseline())
+            width = int(configuration.resolution.width)
+            height = int(configuration.resolution.height)
+        except Exception as error:  # the SDK raises its own types
+            raise SourceReadError(
+                f"could not read the ZED stereo calibration: {error!r}"
+            ) from error
+        if not np.isfinite(baseline_mm) or baseline_mm <= 0.0:
+            raise SourceReadError(
+                f"ZED stereo baseline is unusable: {baseline_mm!r} mm"
+            )
+        try:
+            return StereoCalibration(
+                fx=float(left.fx),
+                fy=float(left.fy),
+                cx=float(left.cx),
+                cy=float(left.cy),
+                baseline_m=baseline_mm * 0.001,
+                width=width,
+                height=height,
+            )
+        except ValueError as error:
+            raise SourceReadError(f"ZED stereo calibration is invalid: {error}") from error
 
     def _read_intrinsics(self) -> tuple[float, float, float, float] | None:
         """Read the left-camera pinhole intrinsics from the SDK, when available."""
@@ -434,6 +489,7 @@ class ZedCameraSource:
         rgb_image = np.ascontiguousarray(rgb_image)
 
         depth_m = self._read_depth_metres() if self.depth_enabled else None
+        right_rgb = self._read_right_image() if self.emit_right else None
 
         timestamp_ns = int(self._zed.get_timestamp(zed.TIME_REFERENCE.IMAGE).get_nanoseconds())
 
@@ -444,7 +500,35 @@ class ZedCameraSource:
             depth=depth_m,
             depth_units=self.DEPTH_UNITS if depth_m is not None else None,
             intrinsics=self._intrinsics,
+            right_image=right_rgb,
+            stereo=self._stereo if right_rgb is not None else None,
         )
+
+    def _read_right_image(self) -> np.ndarray:
+        """Return the rectified right view of the current grab as contiguous RGB8.
+
+        The view is retrieved from the same grab that produced the left image,
+        so the pair shares one capture timestamp. ``get_data`` returns a view of
+        the SDK buffer, which the next grab reuses, so the colour conversion is
+        made on a copy and the result is contiguous.
+        """
+        try:
+            import cv2
+        except ImportError as error:
+            raise SourceReadError("OpenCV is required for the ZED colour conversion") from error
+        if self._right_mat is None:
+            raise SourceReadError("the right view was not requested for this source")
+        self._zed.retrieve_image(self._right_mat, self._sl.VIEW.RIGHT)
+        image = self._right_mat.get_data()
+        if image.ndim == 3 and image.shape[2] == 4:
+            converted = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        elif image.ndim == 3 and image.shape[2] == 3:
+            converted = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            raise SourceReadError(f"unexpected ZED right-image shape: {image.shape}")
+        # cvtColor already returns a new array, so the SDK buffer cannot be
+        # overwritten underneath this frame.
+        return np.ascontiguousarray(converted)
 
     def _read_depth_metres(self) -> np.ndarray:
         """Return the depth map in metres with ``NaN`` for every invalid pixel.

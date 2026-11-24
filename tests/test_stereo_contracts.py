@@ -246,3 +246,191 @@ def test_envelope_fields_are_all_declared_in_the_schema():
     packet = _packet(right_rgb=np.zeros((48, 64, 3), np.uint8), stereo=_calibration())
     undeclared = set(packet.metadata()) - declared
     assert not undeclared, f"envelope emits undeclared keys: {sorted(undeclared)}"
+
+# ------------------------------------------------------- ZED stereo source
+
+
+def test_zed_emit_right_requires_depth_mode_none():
+    """The SDK depth path already computes depth from the pair."""
+    from stream_handler.sources import ZedCameraSource
+
+    with pytest.raises(ValueError, match="emit_right requires depth_mode NONE"):
+        ZedCameraSource(0, depth_mode="QUALITY", emit_right=True)
+
+
+def test_zed_stereo_capture_with_a_fake_sdk(monkeypatch):
+    """The source returns one pair plus calibration, and never requests depth."""
+    from stream_handler import sources as sources_module
+
+    class _Mat:
+        def __init__(self, plane):
+            self._plane = plane
+
+        def get_data(self):
+            return self._plane
+
+    class _FakeZed:
+        class ERROR_CODE:
+            SUCCESS = "SUCCESS"
+
+        class RESOLUTION:
+            VGA = "VGA"
+            HD720 = "HD720"
+            HD1080 = "HD1080"
+
+        class DEPTH_MODE:
+            NONE = "NONE"
+            QUALITY = "QUALITY"
+
+        class VIEW:
+            LEFT = "LEFT"
+            RIGHT = "RIGHT"
+
+        class UNIT:
+            MILLIMETER = "MILLIMETER"
+
+        class MEASURE:
+            DEPTH = "DEPTH"
+
+        class TIME_REFERENCE:
+            IMAGE = "IMAGE"
+
+        class InitParameters:
+            def set_from_camera_id(self, camera_id):
+                self.camera_id = camera_id
+
+        class RuntimeParameters:
+            pass
+
+        height, width = 4, 6
+        left = np.zeros((height, width, 4), np.uint8)
+        left[..., 0] = 30   # B
+        left[..., 2] = 200  # R
+        right = np.zeros((height, width, 4), np.uint8)
+        right[..., 1] = 120  # G differs between views
+        depth_requests = 0
+
+        def Camera(self):
+            return self
+
+        def Mat(self):
+            return _Mat(None)
+
+        def open(self, init):
+            return self.ERROR_CODE.SUCCESS
+
+        def grab(self, runtime=None):
+            return self.ERROR_CODE.SUCCESS
+
+        def close(self):
+            return None
+
+        def retrieve_image(self, mat, view):
+            mat._plane = self.left if view == self.VIEW.LEFT else self.right
+
+        def retrieve_measure(self, mat, measure):
+            type(self).depth_requests += 1
+            mat._plane = np.zeros((self.height, self.width), np.float32)
+
+        def get_camera_information(self):
+            from types import SimpleNamespace
+
+            calibration = SimpleNamespace(
+                left_cam=SimpleNamespace(fx=262.0, fy=262.0, cx=335.0, cy=180.0),
+                get_camera_baseline=lambda: 120.04,
+            )
+            configuration = SimpleNamespace(
+                calibration_parameters=calibration,
+                resolution=SimpleNamespace(width=6, height=4),
+            )
+            return SimpleNamespace(camera_configuration=configuration)
+
+        def get_timestamp(self, reference):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(get_nanoseconds=lambda: 1234)
+
+    fake = _FakeZed()
+    monkeypatch.setattr(sources_module, "_load_zed_sdk", lambda: fake)
+
+    source = sources_module.ZedCameraSource(0, depth_mode="NONE", emit_right=True)
+    source.open()
+    frame = source.read()
+
+    assert frame.right_image is not None
+    assert frame.right_image.shape == (4, 6, 3)
+    assert frame.stereo is not None
+    assert frame.stereo.baseline_m == pytest.approx(0.12004)
+    assert frame.stereo.width == 6 and frame.stereo.height == 4
+    assert frame.depth is None
+    # Depth must not be requested when the SDK is not computing it.
+    assert _FakeZed.depth_requests == 0
+    # BGRA becomes RGB: the red plane moves from channel 2 to channel 0.
+    assert (frame.image[..., 0] == 200).all()
+    source.close()
+
+
+def test_zed_rejects_an_unusable_baseline(monkeypatch):
+    from stream_handler import sources as sources_module
+
+    class _FakeZed:
+        class ERROR_CODE:
+            SUCCESS = "SUCCESS"
+
+        class RESOLUTION:
+            VGA = "VGA"
+            HD720 = "HD720"
+
+        class DEPTH_MODE:
+            NONE = "NONE"
+
+        class VIEW:
+            LEFT = "LEFT"
+            RIGHT = "RIGHT"
+
+        class UNIT:
+            MILLIMETER = "MILLIMETER"
+
+        class MEASURE:
+            DEPTH = "DEPTH"
+
+        class TIME_REFERENCE:
+            IMAGE = "IMAGE"
+
+        class InitParameters:
+            def set_from_camera_id(self, camera_id):
+                self.camera_id = camera_id
+
+        class RuntimeParameters:
+            pass
+
+        def Camera(self):
+            return self
+
+        def Mat(self):
+            return _NoData()
+
+        def open(self, init):
+            return self.ERROR_CODE.SUCCESS
+
+        def get_camera_information(self):
+            from types import SimpleNamespace
+
+            calibration = SimpleNamespace(
+                left_cam=SimpleNamespace(fx=262.0, fy=262.0, cx=335.0, cy=180.0),
+                get_camera_baseline=lambda: 0.0,
+            )
+            configuration = SimpleNamespace(
+                calibration_parameters=calibration,
+                resolution=SimpleNamespace(width=6, height=4),
+            )
+            return SimpleNamespace(camera_configuration=configuration)
+
+    class _NoData:
+        def get_data(self):
+            return None
+
+    monkeypatch.setattr(sources_module, "_load_zed_sdk", lambda: _FakeZed())
+    source = sources_module.ZedCameraSource(0, depth_mode="NONE", emit_right=True)
+    with pytest.raises(sources_module.SourceReadError, match="baseline is unusable"):
+        source.open()
