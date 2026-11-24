@@ -2,9 +2,15 @@
 
 ## Status and objective
 
-This is a planned experiment. The ZED 2i is not available yet. Start device work
-when the camera arrives. The current webcam and Open Broadcaster Software
-(OBS) pipeline remains the live baseline.
+This is a planned experiment. **The ZED 2i is now connected and working** as a
+capture source: `--source zed` in the integrated application, SDK 5.5.0, tested
+at HD720 and 30 frames per second. The camera arrival is no longer a blocker.
+
+The current webcam remains the default live source. The ZED path uses the SDK
+QUALITY depth map on each capture. That is a **benchmark path, not the
+left-right pair estimate** described below, so a ZED SDK runtime result must not
+be used to accept or reject the StereoSGBM path. `docs/integration_runbook.md`
+records the capture commands and the measured behaviour.
 
 Use synchronized left and right ZED images to estimate depth only for a
 reranker-selected refresh frame. The optical-flow processor and reranker use
@@ -84,13 +90,20 @@ and [camera calibration](https://docs.stereolabs.com/docs/development/zed-sdk/mo
 
 ## Verification and acceptance
 
-Before the camera arrives, use a simulated SDK source and synthetic rectified
-pairs with known disparity. Check left-right pairing, RGB order, image copies,
-frame identity, calibration units, depth values, invalid pixels, whole-frame
-fallback, run changes, and unchanged webcam behavior. These tests establish
-the software contract. They do not establish ZED hardware performance.
+Use a simulated SDK source and synthetic rectified pairs with known disparity.
+Check left-right pairing, RGB order, image copies, frame identity, calibration
+units, depth values, invalid pixels, whole-frame fallback, run changes, and
+unchanged webcam behavior. These tests establish the software contract. They do
+not establish ZED hardware performance.
 
-After arrival, record ZED stereo footage with SDK depth disabled. Keep the
+The camera is now available, so these contract checks can also run against real
+ZED frames. The measured real-device facts are: SDK 5.5.0, 1280 x 720 at
+30 frames per second, left-camera intrinsics fx = fy = 522.57 and
+cx = 640.42, cy = 346.93, and a raw depth plane that uses `inf` and `NaN` for
+no-measurement pixels. The capture source converts millimetres to metres and
+maps every non-finite, zero, or negative value to `NaN`.
+
+Record ZED stereo footage with SDK depth disabled. Keep the
 camera serial number, SDK version, resolution, frame rate, calibration, and
 timestamps with each session. Replay identical selected pairs through the
 StereoSGBM and YOLO paths. Generate ZED SDK depth from the recorded footage

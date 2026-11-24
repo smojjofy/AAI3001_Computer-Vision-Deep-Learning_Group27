@@ -171,6 +171,166 @@ extractor has no trained-model score and no live capture-to-display measure.
 
 ## Tests and acceptance
 
+### First mask-training diagnostic (2026-11-22)
+
+`modules.inference.paired_research.train` now loads checked replay pairs with
+the fixed 15-channel input. It has a shared encoder, a mask head, and a motion
+head. The first run trained the mask head only. The motion head has no motion
+target and remains untrained. Use the project virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m modules.inference.paired_research.train `
+  --replay-dir data/processed/learning_replay/person_pilot_01/movement_01 `
+  --labels-root data/processed/learning_replay/labels `
+  --training-filter data/processed/learning_replay/person_pilot_01/movement_01.training_filter.json `
+  --output checkpoints/paired_research/movement_01_mask_diagnostic.pt `
+  --report outputs/paired_research/movement_01_mask_diagnostic.json `
+  --epochs 10 --batch-size 2 --base-channels 12 --device cuda
+```
+
+The run used 32 checked pairs from one `train` session. Its final mask
+intersection over union was 0.895 on those same training pairs. The saved
+baseline mask measured 0.693 on those pairs at 320 x 180. These values show
+that the model can fit this training set. They do not measure performance on
+new footage. The checkpoint records `train_only_no_validation`, and it must
+not be used as the live mask or motion output. Keep its ignored checkpoint
+and report outside Git. Next, collect distinct validation and untouched test
+sessions with checked masks. Use independent motion targets before training
+or scoring the motion head.
+
+### Validation recording and fixed-checkpoint comparison
+
+Record a new raw camera clip under a new session ID and the `validation`
+split. A different clothing colour in the same room checks an appearance
+change. Keep the camera and light fixed for a direct comparison. Include
+stillness, raised arms and open hands, partial occlusion, turns, fast arm
+movement, and a brief exit and return. A 60-second clip is sufficient for the
+first validation pass. Keep the recording outside Git.
+
+After the recording is available, extract it with `scripts.build_learning_replay`
+and `--staged-output`. Build a review set, check selected person masks, and run
+`scripts.learning_data training-filter` with that session's label dataset.
+The filter lists eligible paired frames in each split, although its command
+name says `training-filter`. Then run the fixed-checkpoint evaluator:
+
+```powershell
+.\.venv\Scripts\python.exe -m modules.inference.paired_research.evaluate `
+  --checkpoint checkpoints/paired_research/movement_01_mask_diagnostic.pt `
+  --replay-dir data/processed/learning_replay/person_validation_01/clothes_01 `
+  --labels-root data/processed/learning_replay/labels `
+  --training-filter data/processed/learning_replay/person_validation_01/clothes_01.training_filter.json `
+  --split validation --report outputs/paired_research/clothes_01_validation.json
+```
+
+This evaluator uses a fixed 0.5 mask threshold and the same 320 x 180 resize
+for both methods. It rejects the training session and a duplicate training
+clip. It does not retrain or score the motion head. Keep a later test session
+untouched until model and threshold decisions are final.
+
+### First validation result (2026-11-22)
+
+The `person_validation_01/clothes_01` session contains a different shirt and
+different camera framing in the same room. Its replay has 386 selected rows,
+102 successful refreshes, and no failed refreshes. A time-spread review set
+with 12 low-agreement and 12 other complete pairs received user-checked masks.
+All 24 pairs passed the fixed-checkpoint evaluation. The accepted baseline
+mask had mean intersection over union (IoU) 0.7333. The model mask had mean IoU
+0.6830. The model won on 6 frames, lost on 17, and tied within 0.001 on 1.
+Its mean person coverage was 0.8870 versus 0.9286 for the baseline. Its mean
+background leakage was 0.3080 versus 0.2849 for the baseline. Do not enable
+the checkpoint on the live mask path.
+
+Visual inspection showed disconnected model regions on room objects and lost
+body regions. An exploratory largest-connected-region cleanup raised model
+mean IoU to 0.7513 on these 24 frames. This cleanup was selected after the
+validation result was seen. It is diagnostic evidence, not an independent
+acceptance result. It also remains below the planned +0.03 IoU margin over
+the baseline. The training-only score of 0.895 did not transfer to this new
+session. The small training set, clothing change, and framing change are
+possible causes; this experiment does not isolate them.
+
+This result led to the bounded correction and augmentation comparison below.
+The validation session remains separate from training. A broader training
+session with varied subject scale, clothing, and pose remains useful. The
+motion head still needs independent motion targets and a separate check.
+
+### Bounded correction and augmentation experiment (2026-11-22)
+
+The model now has an optional `bounded_residual` mask mode. It starts with
+the accepted baseline mask. It can change the mask only within that mask or
+12 model pixels from it. The new `paired` augmentation applies one flip,
+scale, and translation to all 15 input channels and the checked mask. It
+changes the horizontal flow sign on a flip and scales both flow components
+on a resize. It also changes the RGB brightness, contrast, and colour. The
+motion head remains untrained. All variants used the same 32 training pairs,
+12 base channels, seed 7, and a 0.5 mask threshold. The three new variants
+ran for 30 epochs. The original absolute model ran for 10 epochs, so the
+table is a development comparison, not a controlled claim about each factor.
+
+| Mask mode | Augmentation | Mean IoU on 24 validation frames | Mean coverage | Mean background leakage |
+| --- | --- | ---: | ---: | ---: |
+| Accepted baseline | None | 0.7333 | 0.9286 | 0.2849 |
+| Absolute model, original | None | 0.6830 | 0.8870 | 0.3080 |
+| Absolute model | Paired | 0.7635 | 0.9494 | 0.2557 |
+| Bounded correction | None | 0.6363 | 0.7443 | 0.1870 |
+| Bounded correction | Paired | 0.8052 | 0.9147 | 0.1412 |
+
+The bounded, augmented model won against the baseline on 21 frames and lost
+on 3. Its mean IoU gain was 0.0719. Visual inspection showed that it did not
+make the distant room-object regions seen with the first model. It still
+removed too much of the person on two frames where the baseline was already
+accurate. A 12-pixel correction gate cannot reach a mean of 0.0063 of checked
+person pixels in the validation set; the worst frame had 0.0778 outside the
+gate. These values are design limits, not model scores.
+
+The selected weights are copied without change to the ignored
+`checkpoints/paired_research/person_mask_candidate_v1.pt`. Its SHA-256 is
+`d821ffcc66557047b50625c4c7345634aacf72b55b0181d0d34d7e487d927606`.
+The ignored `outputs/paired_research/candidate_v1_manifest.json` records the
+four reports and the fixed threshold. A model-only CUDA measurement on this
+computer gave 1.874 ms median and 2.548 ms 95th percentile for one 320 x 180
+input, after warm-up. This does not include depth, pose, data transfer, or
+browser display time.
+
+The validation session was used to select this variant. Do not train on its
+checked masks. Keep the candidate out of the live path. The next quality
+gate is one untouched test session with checked masks, followed by visual
+review and a live shadow-mode timing test. The planned +0.03 IoU margin is
+assessed on that untouched test. A passing test would support mask promotion
+only; it would not validate the untrained motion head.
+
+### Frozen candidate test result (2026-11-22)
+
+The separate `person_test_01/test_01` clip is 27.6 seconds at about 15 frames
+per second. Its replay has 138 selected rows, 46 successful refreshes, and no
+failed refreshes. Before model inference, 14 complete pairs were selected
+across time and four extra pairs were selected from the lowest agreement
+between the two baseline stride settings. The user checked all 18 masks.
+The candidate checkpoint hash matched its frozen manifest before and after
+the test. No model weight or threshold changed.
+
+At 320 x 180, mean mask IoU was 0.7917 for the candidate and 0.7339 for the
+accepted baseline. At the source size of 1280 x 720, with bilinear upsampling
+of model logits and the fixed zero-logit threshold, mean IoU was 0.7997 for
+the candidate and 0.7354 for the accepted baseline. The source-size mean
+gain was 0.0643. The candidate won on 11 frames and lost on 7. Visual review
+showed losses on close or easy frames where the baseline was already good.
+
+The 14 time-spread frames had a mean gain of only 0.0272 and an even split
+of seven wins and seven losses. The four extra difficult frames had a mean
+gain of 0.1941. The difficult frames strongly affect the overall score, so
+do not treat the 0.0643 gain as a representative clip-wide gain. The
+time-spread result is below the planned 0.03 margin. The separate
+pose-keypoint-hull baseline named in this plan is not implemented as an
+independent method, so that comparison remains open. The short clip does not
+show a clear exit and return and cannot measure live latency.
+
+The ignored `outputs/paired_research/candidate_v1_test_decision.json`
+records the test result and limits. Keep this candidate out of the live mask
+path. It can enter shadow-mode timing and visual inspection without changing
+the baseline result. If the team changes the model or threshold after seeing
+this test, use a new untouched recording session for the next final test.
+
 Use unit tests for paired resize and flip transforms, exact frame identity,
 invalid depth, missing pose, malformed model output, model failure, run change,
 and late-result rejection. Use a controlled slow predictor to prove that

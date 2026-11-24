@@ -31,6 +31,23 @@ open the camera. It polls the local HTTP API on `127.0.0.1:8765` through the Vit
 The splat state is fetched only when `/api/diagnostics` reports a new
 `splat.frame_id` (diagnostics poll: 300 ms). No mock splat data is rendered.
 
+## Environment compositor
+
+Use **Environment compositor** in the top bar to open the optional 3D view.
+Import one self-contained `.glb` file of 30 MB or less. The browser keeps the
+file local. The view uses the same published splat frames as the default panel.
+It replaces old splat data with the newest frame after each update completes.
+The default panel continues to run when the compositor is closed.
+
+The imported model is centered and its longest side is set to 4 m. Use the
+scale and X, Y, and Z controls to place it around the subject. Both the model
+and the splats use the constructor world: +X right, +Y up, and camera forward
+-Z. The view reads the capture focal length to set its vertical field of view.
+Opaque model surfaces can hide splats behind them. Transparent model
+surfaces can give incorrect depth results. The optional view does not apply the
+default panel's optical-flow display warp or person-loss fade. Close the view
+to release its renderer resources.
+
 ## Run
 
 Start the integrated pipeline (one window):
@@ -57,6 +74,7 @@ Open the printed Vite URL. The Vite config forwards `/api` to
 cd applications\gui
 npx tsc --noEmit
 npm run build
+npm run check:environment
 ```
 
 `tools/capture-screenshot.ps1` captures the running page with headless Firefox

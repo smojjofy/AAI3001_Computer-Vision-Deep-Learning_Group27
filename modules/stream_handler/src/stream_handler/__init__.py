@@ -13,12 +13,15 @@ from .sources import (
     SourceExhausted,
     SourceFrame,
     StreamHealth,
-    ZedCameraSource
+    ZedCameraSource,
+    describe_zed_devices,
+    zed_is_available,
 )
 
 __all__ = [
     "CameraSource", "FramePacket", "FrameQuality", "IterableFrameSource",
     "LatestFrameQueue", "OBSVirtualCameraSource", "RecordedVideoSource",
     "ReplayMode", "RTSPSource", "SourceExhausted", "SourceFrame", "StreamHandler",
-    "StreamHealth", "TimestampOrigin", "ZedCameraSource"
+    "StreamHealth", "TimestampOrigin", "ZedCameraSource", "describe_zed_devices",
+    "zed_is_available",
 ]

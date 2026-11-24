@@ -42,11 +42,30 @@ class RefreshError(RuntimeError):
     or no separable person mask. That is the invalid-person event from
     `CONTEXT.md` that starts the 500 ms hold and fade. Other failures (model
     load, native construction) are recorded but do not start that timer.
+
+    ``reason`` is a short machine-readable class for a failure report. A caller
+    groups failures by this value instead of matching message text, so a count
+    of failure causes stays correct when a message changes. The classes are:
+
+    - ``pose_depth_error``: the depth or pose model raised.
+    - ``pose_missing``: the pose model ran and found no person.
+    - ``mask_rejected``: a person was found but the mask area failed its guard.
+    - ``construction_rejected``: the adapter rejected the construction frame.
+    - ``construction_failed``: the native constructor raised.
+    - ``depth_invalid``: the depth plane had too little usable value.
+    - ``other``: anything without a specific class.
     """
 
-    def __init__(self, message: str, *, person_missing: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        person_missing: bool = False,
+        reason: str = "other",
+    ) -> None:
         super().__init__(message)
         self.person_missing = bool(person_missing)
+        self.reason = str(reason)
 
 
 @dataclass(frozen=True)
@@ -78,6 +97,9 @@ class RefreshOutcome:
     mask_pose_joints: list[dict[str, Any]] | None = None
     pose_confidence: float = 0.0
     depth_source: str = "yolo"
+    # Face depth correction. ``face_depth_info`` is None when no rule ran.
+    face_depth_info: dict[str, Any] | None = None
+    face_depth_timings_ms: dict[str, float] = field(default_factory=dict)
 
     @property
     def splat_count(self) -> int:
@@ -115,6 +137,10 @@ class RefreshPipeline:
     require_pose: bool = True
     depth_confidence: bool = False
     generation: int = 0
+    # Off by default. The rule runs after mask selection and before
+    # construction, and it changes only finite, positive, already-valid pixels
+    # inside the person mask.
+    face_depth_rule: Any = None
     _pipeline: Any = field(default=None, init=False, repr=False)
     _intrinsics: tuple[float, float, float, float] | None = field(default=None, init=False, repr=False)
     _intrinsics_key: tuple[int, int, tuple[float, float, float, float] | None] | None = field(
@@ -243,7 +269,7 @@ class RefreshPipeline:
         except Exception as error:  # the caller keeps the active state
             self.failure_count += 1
             self.last_error = f"pose/depth failed: {error!r}"
-            raise RefreshError(self.last_error) from error
+            raise RefreshError(self.last_error, reason="pose_depth_error") from error
         t_depth = perf_counter()
 
         if self.require_pose and not bool(result.detected):
@@ -251,7 +277,7 @@ class RefreshPipeline:
             # state. Do not build a person state from background splats.
             self.failure_count += 1
             self.last_error = "pose not detected in the selected refresh frame"
-            raise RefreshError(self.last_error, person_missing=True)
+            raise RefreshError(self.last_error, person_missing=True, reason="pose_missing")
 
         depth_m = np.asarray(result.depth.depth, dtype=np.float32)
         pose_joints_for_mask = None
@@ -300,8 +326,18 @@ class RefreshPipeline:
                 self.mask_config.max_area_fraction,
             )
             self.last_error = f"depth threshold found no person region ({reason})"
-            raise RefreshError(self.last_error, person_missing=True)
+            raise RefreshError(self.last_error, person_missing=True, reason="mask_rejected")
         t_mask = perf_counter()
+
+        # Face depth correction. It is off unless a rule is set. It runs after
+        # mask selection and before construction above, so the mask and the
+        # validity that construction reads are the corrected values.
+        face_depth_info: dict[str, Any] | None = None
+        face_depth_timings: dict[str, float] = {}
+        if self.face_depth_rule is not None:
+            face_depth_info, face_depth_timings, depth_m, mask_info = self._correct_face_depth(
+                depth_m, mask_info, pose_joints_for_mask
+            )
 
         try:
             frame = construction_frame_from_refresh(
@@ -317,7 +353,7 @@ class RefreshPipeline:
         except Exception as error:
             self.failure_count += 1
             self.last_error = f"construction frame rejected: {error!r}"
-            raise RefreshError(self.last_error) from error
+            raise RefreshError(self.last_error, reason="construction_rejected") from error
 
         from modules.splat_constructor import ConstructionConfig, construct_splat_state
 
@@ -329,7 +365,7 @@ class RefreshPipeline:
         except Exception as error:
             self.failure_count += 1
             self.last_error = f"native construction failed: {error!r}"
-            raise RefreshError(self.last_error) from error
+            raise RefreshError(self.last_error, reason="construction_failed") from error
         t_build = perf_counter()
 
         pose_preview = None
@@ -356,6 +392,13 @@ class RefreshPipeline:
             "construct": (t_build - t_mask) * 1000.0,
             "pose_preview": (t_preview - t_build) * 1000.0,
         }
+        if face_depth_timings:
+            # The correction runs inside the mask stage. Report it as its own
+            # stage so its cost stays measurable, and take it out of "mask" so
+            # the stage sum is still one total.
+            correction_ms = float(face_depth_timings.get("face_depth", 0.0))
+            timings["mask"] = max(0.0, timings["mask"] - correction_ms)
+            timings["face_depth"] = correction_ms
         timings["total"] = stage_total(timings)
         capture_age_ms = capture_age_ms_at(
             packet.capture_timestamp_ns,
@@ -404,7 +447,59 @@ class RefreshPipeline:
             mask_pose_joints=pose_joints_for_mask,
             pose_confidence=float(pose_confidence),
             depth_source=str(result.depth_source),
+            face_depth_info=face_depth_info,
+            face_depth_timings_ms=face_depth_timings,
         )
+
+    def _correct_face_depth(
+        self,
+        depth_m: np.ndarray,
+        mask_info: DepthThresholdMask,
+        pose_joints: list[dict[str, Any]] | None,
+    ) -> tuple[dict[str, Any], dict[str, float], np.ndarray, DepthThresholdMask]:
+        """Run the face depth rule and rebuild the mask record from its result.
+
+        The rule owns the mask and validity invariants: the mask is unchanged and
+        the validity never increases. This method checks both and reports a
+        violation in ``info`` instead of raising, so one bad frame cannot stop
+        the live run.
+        """
+        from scripts.face_depth_test import correct_face_depth
+
+        started = perf_counter()
+        result = correct_face_depth(
+            depth_m,
+            np.asarray(mask_info.validity, dtype=np.float32),
+            np.asarray(mask_info.mask),
+            pose_joints,
+            self.face_depth_rule,
+        )
+        elapsed_ms = (perf_counter() - started) * 1000.0
+        info = dict(result.info)
+        mask_unchanged = bool(np.array_equal(np.asarray(result.mask), np.asarray(mask_info.mask)))
+        validity_ok = bool(
+            np.all(np.asarray(result.validity) <= np.asarray(mask_info.validity) + np.float32(1e-6))
+        )
+        info["pipeline_checks"] = {
+            "mask_unchanged": mask_unchanged,
+            "validity_not_increased": validity_ok,
+        }
+        if not (mask_unchanged and validity_ok):
+            # Keep the accepted mask and depth if the rule broke an invariant.
+            info["applied"] = False
+            info["reason"] = "invariant_violation"
+            return info, {"face_depth": round(elapsed_ms, 3)}, depth_m, mask_info
+        corrected_depth = np.asarray(result.depth_m, dtype=np.float32)
+        corrected_mask = DepthThresholdMask(
+            mask=mask_info.mask,
+            validity=np.asarray(result.validity, dtype=np.float32),
+            near_m=mask_info.near_m,
+            far_m=mask_info.far_m,
+            valid_fraction=mask_info.valid_fraction,
+            area_fraction=mask_info.area_fraction,
+            confidence=mask_info.confidence,
+        )
+        return info, {"face_depth": round(elapsed_ms, 3)}, corrected_depth, corrected_mask
 
     def close(self) -> None:
         if self._pipeline is not None:

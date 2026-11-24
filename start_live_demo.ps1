@@ -1,18 +1,27 @@
 # Start the live splat pipeline and open the browser viewer.
 #
 # Run from anywhere:
-#   .\start_live_demo.ps1
+#   .\start_live_demo.ps1                      # webcam, the default
+#   .\start_live_demo.ps1 -Source zed          # ZED 2i on USB
+#   .\start_live_demo.ps1 -Source auto         # webcam, or ZED when it is connected
 #   .\start_live_demo.ps1 -DurationS 180 -Port 8765
 #   .\start_live_demo.ps1 -Source video -VideoPath .tmp\clip.mp4
+#   .\start_live_demo.ps1 -ListZed             # list connected ZED cameras and exit
 #
 # The script checks the environment, starts the integrated app in a new window,
 # waits until a splat state is published, then opens the viewer in your browser.
 # Press Ctrl+C in the app window to stop it, or run with -DurationS to stop it
 # automatically.
 param(
-    [ValidateSet('camera', 'webcam', 'obs', 'video')]
-    [string]$Source = 'camera',
+    [ValidateSet('auto', 'camera', 'webcam', 'obs', 'zed', 'video')]
+    [string]$Source = 'webcam',
     [int]$Device = 0,
+    [switch]$ListZed,
+    [ValidateSet('HD720', 'HD1080', 'HD2K', 'VGA')]
+    [string]$ZedResolution = 'HD720',
+    [int]$ZedFps = 30,
+    [ValidateSet('NEURAL', 'NEURAL_PLUS', 'ULTRA', 'QUALITY', 'PERFORMANCE')]
+    [string]$ZedDepthMode = 'QUALITY',
     [ValidateSet('auto', 'dshow', 'msmf')]
     [string]$CameraBackend = 'dshow',
     [int]$Port = 8765,
@@ -21,7 +30,14 @@ param(
     [double]$Threshold = 0.002,
     [int]$TimeoutSec = 120,
     [switch]$RebuildGui,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    # Shadow mask run: compute a research mask candidate beside each refresh and
+    # record it. The published splat does not change.
+    [string]$ShadowMaskCheckpoint = '',
+    [string]$ShadowMaskLog = '',
+    [switch]$FaceDepthCorrection,
+    [string]$FaceDepthRuleJson = '',
+    [string]$FaceDepthLog = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -101,6 +117,12 @@ if ($needBuild) {
 
 # ------------------------------------------------------------------ the app
 
+if ($ListZed) {
+    # Show the connected ZED cameras and stop. This needs no GUI and no server.
+    & $python -m scripts.run_integration_app --list-zed
+    exit $LASTEXITCODE
+}
+
 if ($Source -eq 'video') {
     if ([string]::IsNullOrWhiteSpace($VideoPath)) {
         throw "Pass -VideoPath when -Source is 'video'."
@@ -130,12 +152,50 @@ switch ($Source) {
     'webcam' {
         $appArgs += @('--device', "$Device", '--camera-backend', $CameraBackend)
     }
+    'zed' {
+        # The ZED SDK reports its own camera index, so -Device is not forwarded.
+        $appArgs += @('--zed-camera-id', "$Device", '--zed-resolution', $ZedResolution, '--zed-fps', "$ZedFps", '--zed-depth-mode', $ZedDepthMode)
+    }
+    'auto' {
+        # --source auto decides inside the app: webcam first, ZED when present.
+        # The webcam arguments stay valid for the fallback.
+        $appArgs += @('--device', "$Device", '--camera-backend', $CameraBackend)
+        $appArgs += @('--zed-resolution', $ZedResolution, '--zed-fps', "$ZedFps", '--zed-depth-mode', $ZedDepthMode)
+    }
     'video' {
         $appArgs += @('--path', $resolvedVideo)
     }
 }
 if ($DurationS -gt 0) {
     $appArgs += @('--duration-s', "$DurationS")
+}
+if ($ShadowMaskCheckpoint) {
+    if (-not $ShadowMaskLog) {
+        throw "-ShadowMaskCheckpoint needs -ShadowMaskLog"
+    }
+    $resolvedShadowLog = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ShadowMaskLog)
+    $resolvedShadowLogDir = Split-Path -Parent $resolvedShadowLog
+    New-Item -ItemType Directory -Force -Path $resolvedShadowLogDir | Out-Null
+    $appArgs += @(
+        '--shadow-mask-checkpoint', (Resolve-Path $ShadowMaskCheckpoint).Path,
+        '--shadow-mask-log', $resolvedShadowLog,
+        '--shadow-mask-sha256', 'd821ffcc66557047b50625c4c7345634aacf72b55b0181d0d34d7e487d927606'
+    )
+}
+if ($FaceDepthCorrection) {
+    if (-not $FaceDepthRuleJson) {
+        throw "-FaceDepthCorrection needs -FaceDepthRuleJson"
+    }
+    if (-not $FaceDepthLog) {
+        throw "-FaceDepthCorrection needs -FaceDepthLog"
+    }
+    $resolvedFaceDepthLog = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($FaceDepthLog)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resolvedFaceDepthLog) | Out-Null
+    $appArgs += @(
+        '--face-depth-correction',
+        '--face-depth-rule-json', (Resolve-Path $FaceDepthRuleJson).Path,
+        '--face-depth-log', $resolvedFaceDepthLog
+    )
 }
 
 $url = "http://127.0.0.1:$Port/"

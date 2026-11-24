@@ -1,11 +1,19 @@
 """Run the integrated live splat application on this computer.
 
     python scripts/run_integration_app.py --source webcam --device 0
+    python scripts/run_integration_app.py --source zed
+    python scripts/run_integration_app.py --source auto
+    python scripts/run_integration_app.py --list-zed
 
 The application captures RGB frames, scores each frame in a 100 ms candidate
 window with reference-to-candidate optical flow, selects one candidate, and runs
 pose + YOLO depth + a depth-threshold mask + the native Splat Constructor only
 for a refresh. The newest complete splat state is published to the browser.
+
+Sources: ``webcam`` is the default. ``zed`` uses a Stereolabs ZED camera on
+USB. ``auto`` tries the webcam first and selects ``zed`` only when the ZED SDK
+imports and a ZED camera answers. A ZED source passes its depth map and its
+calibrated intrinsics into the packet.
 
 Endpoints (default port 8765):
     /api/preview      latest captured frame (JPEG)
@@ -46,7 +54,11 @@ from live_pipeline.background_calibration import (  # noqa: E402
     BackgroundCalibrator,
     CalibrationError,
 )
-from live_pipeline.pipeline import RefreshError, RefreshPipeline  # noqa: E402
+from live_pipeline.pipeline import (  # noqa: E402
+    RefreshError,
+    RefreshOutcome,
+    RefreshPipeline,
+)
 from live_pipeline.scheduler import RefreshDispatcher, RefreshJob  # noqa: E402
 from live_pipeline.window import WindowSelector  # noqa: E402
 from optical_flow import FlowConfig, create_estimator  # noqa: E402
@@ -56,7 +68,29 @@ from stream_handler import (  # noqa: E402
     RecordedVideoSource,
     ReplayMode,
     StreamHandler,
+    ZedCameraSource,
+    describe_zed_devices,
+    zed_is_available,
 )
+
+
+def resolve_source_choice(requested: str) -> str:
+    """Return the source to use, applying the ``auto`` rule.
+
+    ``auto`` prefers the webcam and uses the ZED only when the SDK imports and a
+    ZED camera is connected. The ZED SDK probe takes about one second, so it is
+    skipped for every explicit choice. The function never raises.
+    """
+    if requested != "auto":
+        return requested
+    if zed_is_available():
+        print(
+            json.dumps({"source": {"requested": "auto", "selected": "zed", "devices": describe_zed_devices()}}),
+            flush=True,
+        )
+        return "zed"
+    print(json.dumps({"source": {"requested": "auto", "selected": "webcam"}}), flush=True)
+    return "webcam"
 
 
 def build_source(args):
@@ -64,6 +98,13 @@ def build_source(args):
         if args.path is None or not args.path.is_file():
             raise SystemExit("--source video requires an existing --path")
         return RecordedVideoSource(args.path, replay_mode=ReplayMode.PACED)
+    if args.source == "zed":
+        return ZedCameraSource(
+            args.zed_camera_id,
+            resolution=args.zed_resolution,
+            fps=args.zed_fps,
+            depth_mode=args.zed_depth_mode,
+        )
     capture_size = None
     if args.capture_width > 0 and args.capture_height > 0:
         capture_size = (args.capture_width, args.capture_height)
@@ -78,10 +119,48 @@ def build_source(args):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--source", choices=("webcam", "camera", "obs", "video"), default="webcam")
+    parser.add_argument(
+        "--source",
+        choices=("auto", "webcam", "camera", "obs", "zed", "video"),
+        default="webcam",
+        help=(
+            "Capture source. 'webcam' is the default. 'auto' uses the webcam and "
+            "selects 'zed' only when the ZED SDK and a ZED camera are available."
+        ),
+    )
     parser.add_argument("--path", type=Path, help="Recorded video for --source video")
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--camera-backend", choices=("auto", "dshow", "msmf"), default="dshow")
+    parser.add_argument(
+        "--zed-camera-id",
+        type=int,
+        default=0,
+        help="ZED camera index for --source zed. Run with --list-zed to see the connected devices.",
+    )
+    parser.add_argument(
+        "--zed-resolution",
+        choices=("HD720", "HD1080", "HD2K", "VGA"),
+        default="HD720",
+        help="ZED resolution for --source zed. HD720 matches the recorded replay clips.",
+    )
+    parser.add_argument("--zed-fps", type=int, default=30, help="ZED capture rate for --source zed")
+    parser.add_argument(
+        "--zed-depth-mode",
+        choices=("NEURAL", "NEURAL_PLUS", "ULTRA", "QUALITY", "PERFORMANCE", "NONE"),
+        default="QUALITY",
+        help=(
+            "ZED depth mode for --source zed. QUALITY opens in about 2 s. NONE "
+            "captures RGB only and leaves depth to the selected-frame YOLO model, "
+            "which is the fair comparison for the depth-latency benchmark. NEURAL "
+            "and NEURAL_PLUS build a TensorRT engine on first use; that build can "
+            "run for many minutes and it happens before the first frame."
+        ),
+    )
+    parser.add_argument(
+        "--list-zed",
+        action="store_true",
+        help="Print the connected ZED cameras and exit without starting the pipeline.",
+    )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--window-ms", type=float, default=100.0)
     parser.add_argument("--threshold", type=float, default=0.02, help="Fixed normalized flow refresh threshold")
@@ -127,7 +206,90 @@ def main() -> None:
         default=0.0,
         help="Diagnostic: start one new capture run after this many seconds, to test run boundaries. 0 disables it.",
     )
+    # Shadow mask test. A shadow run computes the research mask candidate for
+    # each refresh and records it. It never changes the published splat.
+    parser.add_argument(
+        "--shadow-mask-checkpoint",
+        type=Path,
+        default=None,
+        help="Research mask checkpoint for the shadow run. The published splat does not change.",
+    )
+    parser.add_argument(
+        "--shadow-mask-log",
+        type=Path,
+        default=None,
+        help="JSONL file for shadow mask records. One line for each poll.",
+    )
+    parser.add_argument(
+        "--shadow-mask-sha256",
+        default=None,
+        help="Expected SHA-256 of the shadow checkpoint. The run stops on a mismatch.",
+    )
+    parser.add_argument(
+        "--shadow-mask-device",
+        choices=("auto", "cuda", "cpu"),
+        default="auto",
+        help="Device for the shadow mask model only.",
+    )
+    parser.add_argument(
+        "--shadow-mask-session",
+        default=None,
+        help="Session label written to each shadow record. Default is the log file stem.",
+    )
+    parser.add_argument(
+        "--shadow-mask-interval-s",
+        type=float,
+        default=2.0,
+        help="Minimum seconds between shadow polls. The shadow run is not on the refresh path.",
+    )
+    # Face depth correction. Off by default.
+    parser.add_argument(
+        "--face-depth-correction",
+        action="store_true",
+        help="Apply the bounded face depth correction after mask selection. Off by default.",
+    )
+    parser.add_argument(
+        "--face-depth-rule-json",
+        type=Path,
+        default=None,
+        help="Parameter override for the face depth correction. Needs --face-depth-correction.",
+    )
+    parser.add_argument(
+        "--face-depth-log",
+        type=Path,
+        default=None,
+        help="JSONL file with one record for each corrected refresh.",
+    )
     args = parser.parse_args()
+    if args.list_zed:
+        devices = describe_zed_devices()
+        if devices:
+            print(json.dumps({"zed_devices": devices}, indent=2), flush=True)
+        else:
+            print(
+                json.dumps(
+                    {
+                        "zed_devices": [],
+                        "reason": (
+                            "no ZED camera was found, or the ZED SDK (pyzed) is not "
+                            "installed for this Python"
+                        ),
+                    },
+                    indent=2,
+                ),
+                flush=True,
+            )
+        return 0
+    # 'auto' prefers the webcam and selects the ZED only when it is available.
+    args.source = resolve_source_choice(args.source)
+    if args.face_depth_correction and args.face_depth_rule_json is None:
+        raise SystemExit("--face-depth-correction needs --face-depth-rule-json")
+    if (not args.face_depth_correction) and (
+        args.face_depth_rule_json is not None or args.face_depth_log is not None
+    ):
+        raise SystemExit("--face-depth-rule-json and --face-depth-log need --face-depth-correction")
+    if (args.shadow_mask_checkpoint is None) != (args.shadow_mask_log is None):
+        raise SystemExit("--shadow-mask-checkpoint and --shadow-mask-log must be given together")
 
     state = PipelineState()
     # One capture run. A source reopen, resolution change, or backward capture
@@ -158,6 +320,57 @@ def main() -> None:
         require_pose=not args.allow_missing_pose,
         generation=run_guard.generation,
     )
+    # Face depth correction. Off by default, so a normal run is unchanged.
+    face_depth_rule = None
+    face_depth_log = None
+    if args.face_depth_correction:
+        from scripts.face_depth_test import load_rule
+
+        try:
+            face_depth_rule = load_rule(args.face_depth_rule_json)
+        except (OSError, ValueError) as error:
+            raise SystemExit(f"face depth rule {args.face_depth_rule_json} is invalid: {error}")
+        pipeline.face_depth_rule = face_depth_rule
+        face_depth_log = open(args.face_depth_log, "a", encoding="utf-8", newline="\n")
+        counters_face_depth = Counter()
+    else:
+        counters_face_depth = None
+
+    # Shadow mask run. It runs in a child process and only writes records.
+    shadow_runner = None
+    shadow_pipeline = None
+    shadow_final: dict = {}
+    if args.shadow_mask_checkpoint is not None:
+        from modules.inference.paired_research.shadow import ShadowProcessWriter
+
+        try:
+            shadow_pipeline = ShadowProcessWriter(
+                checkpoint=args.shadow_mask_checkpoint,
+                log_path=args.shadow_mask_log,
+                expected_sha256=args.shadow_mask_sha256,
+                device=args.shadow_mask_device,
+                session_id=args.shadow_mask_session or args.shadow_mask_log.stem,
+            )
+        except (OSError, ValueError) as error:
+            raise SystemExit(f"shadow mask checkpoint is rejected: {error}")
+        print(
+            json.dumps(
+                {
+                    "shadow_mask": {
+                        "checkpoint": str(args.shadow_mask_checkpoint),
+                        "sha256": args.shadow_mask_sha256,
+                        "device": args.shadow_mask_device,
+                        "log": str(args.shadow_mask_log),
+                        "process": "child",
+                        "published_splat_unchanged": True,
+                    }
+                }
+            ),
+            flush=True,
+        )
+    # A list holds the mutable value, so the refresh worker's nested helper can
+    # read and write it without a nonlocal binding to main().
+    shadow_last_poll = [0.0]
     estimator = create_estimator(FlowConfig())
     selector = WindowSelector(
         estimator,
@@ -167,6 +380,8 @@ def main() -> None:
     )
 
     counters: Counter[str] = Counter()
+    # One record for each failed refresh, grouped by class in the summary.
+    failure_log: list[dict[str, object]] = []
     # Cascade offsets at the start of the current capture run. The live cascade
     # must describe one run, while the dispatcher and window counters are
     # process lifetime totals.
@@ -349,10 +564,50 @@ def main() -> None:
             return
         try:
             outcome = pipeline.process(job.packet, generation=job_generation)
+            if face_depth_log is not None:
+                # The correction runs inside the refresh and changes
+                # outcome.depth_m and outcome.mask.validity. The record keeps the
+                # invariants so the log can prove what the rule did.
+                counters_face_depth["refreshes"] += 1
+                counters_face_depth["corrected"] += int(bool(outcome.face_depth_info.get("applied")))
+                face_depth_log.write(
+                    json.dumps(
+                        {
+                            "schema_version": "1",
+                            "kind": "live_face_depth",
+                            "session_id": args.face_depth_log.stem,
+                            "generation": job_generation,
+                            "frame_id": int(outcome.frame_id),
+                            "source_id": outcome.source_id,
+                            "capture_timestamp_ns": str(outcome.capture_timestamp_ns),
+                            "mask_source": outcome.header.get("mask", {}).get("source"),
+                            "face_depth": outcome.face_depth_info,
+                            "timings_ms": {
+                                key: round(value, 3) for key, value in outcome.face_depth_timings_ms.items()
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+                face_depth_log.flush()
         except RefreshError as error:
             def record_failure() -> None:
                 counters["refresh_failed"] += 1
                 run_counters.record_failure(job_generation)
+                # Group every failure by class, not only the last message. RT-0087
+                # needs a count for each cause.
+                reason = getattr(error, "reason", "other")
+                counters[f"refresh_failed_{reason}"] += 1
+                with lock:
+                    failure_log.append(
+                        {
+                            "frame_id": int(job.packet.frame_id),
+                            "generation": int(job_generation),
+                            "reason": str(reason),
+                            "person_missing": bool(getattr(error, "person_missing", False)),
+                            "message": str(error)[:300],
+                        }
+                    )
                 if getattr(error, "person_missing", False):
                     # CONTEXT.md invalid-person event: hold starts now and
                     # latches until a successful refresh publishes a state.
@@ -367,6 +622,22 @@ def main() -> None:
                 counters["refresh_discarded_stale"] += 1
                 return
             raise
+        def run_shadow_once(shadow_outcome, shadow_packet, shadow_generation: int) -> None:
+            try:
+                shadow_pipeline.submit(shadow_packet, shadow_outcome, generation=shadow_generation)
+            except Exception as error:  # a shadow fault must not stop the run
+                counters["shadow_write_failed"] += 1
+                print(json.dumps({"shadow_error": f"{type(error).__name__}: {error}"}), flush=True)
+
+        if shadow_pipeline is not None:
+            # The shadow run must never delay the refresh or touch the published
+            # state. submit() hands the frame to a child process, which holds its
+            # own interpreter lock, and returns at once.
+            if time.monotonic() - shadow_last_poll[0] >= max(0.0, args.shadow_mask_interval_s):
+                shadow_last_poll[0] = time.monotonic()
+                run_shadow_once(outcome, job.packet, job_generation)
+                counters["shadow_submitted"] += 1
+
         # One consistent snapshot: splat, pose-depth image, mask, and the pose
         # joints that belong to this state. A missing preview is published as
         # None so the viewer cannot show an older frame.
@@ -534,18 +805,41 @@ def main() -> None:
         pass
     finally:
         elapsed = time.monotonic() - started
-        handler.stop()
-        flush_window()
+        # A shutdown step must never prevent the summary. The ZED SDK close path
+        # can raise from native code, and losing the whole run record because of
+        # a teardown error hides the measurement the run was made for.
+        shutdown_errors: list[str] = []
+
+        def try_shutdown(name: str, action) -> None:
+            try:
+                action()
+            except BaseException as error:  # noqa: BLE001 - shutdown is best effort
+                shutdown_errors.append(f"{name}: {type(error).__name__}: {error}")
+                print(json.dumps({"shutdown_error": shutdown_errors[-1]}), flush=True)
+
+        try_shutdown("handler.stop", handler.stop)
+        try_shutdown("flush_window", flush_window)
         # Shutdown must not wait for in-flight model work. A slow refresh would
         # otherwise hang the process for the full dispatcher timeout, which is
         # what a finite video source shows when it reaches its end.
-        try:
-            dispatcher.close(drain=False, timeout_s=2.0)
-        except TimeoutError:
-            print("warning: refresh worker did not stop in time; exiting anyway", flush=True)
-        server.shutdown()
-        server.server_close()
-        pipeline.close()
+        def close_dispatcher() -> None:
+            try:
+                dispatcher.close(drain=False, timeout_s=2.0)
+            except TimeoutError:
+                print("warning: refresh worker did not stop in time; exiting anyway", flush=True)
+
+        try_shutdown("dispatcher.close", close_dispatcher)
+        try_shutdown("server.shutdown", server.shutdown)
+        try_shutdown("server.server_close", server.server_close)
+        try_shutdown("pipeline.close", pipeline.close)
+        if shadow_pipeline is not None:
+            try:
+                shadow_final = shadow_pipeline.close()
+            except BaseException as error:  # noqa: BLE001 - shutdown is best effort
+                shutdown_errors.append(f"shadow_pipeline.close: {type(error).__name__}: {error}")
+                print(json.dumps({"shutdown_error": shutdown_errors[-1]}), flush=True)
+        if face_depth_log is not None:
+            try_shutdown("face_depth_log.close", face_depth_log.close)
 
     summary = {
         "elapsed_s": round(elapsed, 2),
@@ -559,6 +853,14 @@ def main() -> None:
         "capture_fps": round(handler.metrics.capture_fps, 2),
         "queue_drops": handler.queue.dropped_total,
         "last_error": latest["last_error"],
+        # RT-0087: every failure grouped by class, with a small sample of each.
+        "refresh_failure_classes": {
+            reason: int(count)
+            for key, count in sorted(counters.items())
+            for reason in [key.removeprefix("refresh_failed_")]
+            if key.startswith("refresh_failed_") and key != "refresh_failed"
+        },
+        "refresh_failure_samples": failure_log[:40],
         "latency_ms": summarize_ms(latency_samples),
         # The first refresh after model load includes warm-up and is not a
         # steady-state latency sample.
@@ -575,6 +877,19 @@ def main() -> None:
             "reuse": counters["reuse"],
         },
     }
+    if shadow_pipeline is not None:
+        summary["shadow_mask"] = {
+            "log": str(args.shadow_mask_log),
+            "process": "child",
+            "published_splat_unchanged": True,
+            "submitted": int(counters["shadow_submitted"]),
+            **shadow_final,
+        }
+    if counters_face_depth is not None:
+        summary["face_depth_correction"] = {
+            "log": str(args.face_depth_log),
+            **dict(counters_face_depth),
+        }
     print(json.dumps({"summary": summary}, indent=2), flush=True)
     if args.summary_json is not None:
         args.summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")

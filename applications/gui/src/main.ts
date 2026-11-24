@@ -31,6 +31,7 @@ import {
   splatKey,
 } from './api/identity'
 import { FrameProcessorPanel } from './components/FrameProcessorPanel'
+import type { EnvironmentCompositor } from './components/EnvironmentCompositor'
 import { InferencePanel } from './components/InferencePanel'
 import { OriginalInputPanel } from './components/OriginalInputPanel'
 import { SplatOutputPanel } from './components/SplatOutputPanel'
@@ -41,6 +42,7 @@ import type {
   MotionPayload,
   PoseDepthFrame,
   SplatHeader,
+  SplatFrame,
 } from './api/types'
 
 const PREVIEW_POLL_MS = 100
@@ -80,9 +82,12 @@ app.innerHTML = `
         <h1>Real-Time 2.5D Reconstruction Viewer</h1>
         <p>Single Camera Pipeline · live local API</p>
       </div>
+      <div class="top-bar-actions">
+        <button type="button" id="environment-open">Environment compositor</button>
       <div class="status" id="capture-status">
         <span class="status-dot"></span>
         <span class="status-label">WAITING FOR INPUT</span>
+      </div>
       </div>
     </header>
     <main class="viewer-grid" id="viewer-grid"></main>
@@ -108,6 +113,24 @@ viewerGrid.appendChild(inferencePanel.getElement())
 
 const splatOutputPanel = new SplatOutputPanel()
 viewerGrid.appendChild(splatOutputPanel.getElement())
+let environmentCompositor: EnvironmentCompositor | null = null
+let latestEnvironmentFrame: SplatFrame | null = null
+const environmentOpenButton = document.querySelector<HTMLButtonElement>('#environment-open')
+environmentOpenButton?.addEventListener('click', async () => {
+  environmentOpenButton.disabled = true
+  try {
+    if (!environmentCompositor) {
+      const { EnvironmentCompositor } = await import('./components/EnvironmentCompositor')
+      environmentCompositor = new EnvironmentCompositor()
+    }
+    if (latestEnvironmentFrame) environmentCompositor.setSplatFrame(latestEnvironmentFrame)
+    await environmentCompositor.open()
+  } catch (error) {
+    console.error('Environment compositor failed:', error)
+  } finally {
+    environmentOpenButton.disabled = false
+  }
+})
 splatOutputPanel.onCalibrate(() => {
   void startCalibration()
 })
@@ -324,6 +347,8 @@ function clearDisplayedState(): void {
   maskRetryTimer = null
   poseDepthRetryTimer = null
   splatOutputPanel.clearState()
+  latestEnvironmentFrame = null
+  environmentCompositor?.clearState()
   frameProcessorPanel.setMaskImage(null, null)
   frameProcessorPanel.setDepthFrame(null, null)
   frameProcessorPanel.setMotion(null)
@@ -414,6 +439,8 @@ async function refreshSplat(key: string): Promise<void> {
           splatRenderedGeneration = Number(header.generation ?? 0)
           splatRenderedFrameInt = Number(header.frame_id_int ?? header.frame_id)
           splatOutputPanel.setSplatFrame(result.data)
+          latestEnvironmentFrame = result.data
+          environmentCompositor?.setSplatFrame(result.data)
           // Capture to display is an estimate: capture age at publish (shared
           // monotonic clock), publish to response age, and every browser phase
           // from the response arriving to the renderer applying this state. The

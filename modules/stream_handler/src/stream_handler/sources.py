@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import os
 from pathlib import Path
 import threading
 import time
@@ -39,7 +40,15 @@ def _load_zed_sdk():
 
     The SDK is optional: only the ZED source needs it. Importing it lazily keeps
     camera, OBS, video, and RTSP sources usable on machines without the SDK.
+
+    On Windows the ``pyzed`` extension module links against ``sl_zed64.dll`` in
+    the SDK ``bin`` directory. That directory is not always on ``PATH``, and a
+    missing entry gives ``ImportError: DLL load failed`` rather than a clear
+    message. This function adds the directory with ``os.add_dll_directory``,
+    which is the supported way to make the dependency visible on Python 3.8+.
+    It does not change ``PATH``, so it cannot disturb other libraries.
     """
+    _add_zed_dll_directory()
     try:
         import pyzed.sl as zed
     except ModuleNotFoundError as error:
@@ -47,7 +56,54 @@ def _load_zed_sdk():
             "The Stereolabs ZED SDK (pyzed) is not installed. Install it from the "
             "ZED SDK installer, or select a different --source."
         ) from error
+    except ImportError as error:
+        raise SourceReadError(
+            "The Stereolabs ZED SDK (pyzed) is installed but its native library "
+            "did not load. Check that the ZED SDK is installed and that "
+            "sl_zed64.dll is in the SDK bin directory."
+        ) from error
     return zed
+
+
+def _add_zed_dll_directory() -> None:
+    """Add the ZED SDK ``bin`` directory to the Windows DLL search path.
+
+    The directory is found from ``ZED_SDK_ROOT`` when it is set, otherwise from
+    the default install locations. A missing directory is not an error here,
+    because a machine without the SDK must still reach the clear import message
+    in :func:`_load_zed_sdk`. Adding the same directory twice is harmless.
+    """
+    if not hasattr(os, "add_dll_directory"):
+        return
+    candidates: list[os.PathLike[str] | str] = []
+    root = os.environ.get("ZED_SDK_ROOT")
+    if root:
+        candidates.append(root)
+    candidates.extend(
+        (
+            r"C:\Program Files (x86)\ZED SDK",
+            r"C:\Program Files\ZED SDK",
+        )
+    )
+    for base in candidates:
+        bin_dir = os.path.join(os.fspath(base), "bin")
+        if not os.path.isdir(bin_dir):
+            continue
+        key = os.path.normcase(os.path.abspath(bin_dir))
+        if key in _ZED_DLL_DIRECTORIES:
+            return
+        try:
+            handle = os.add_dll_directory(bin_dir)
+        except OSError:
+            continue
+        # Keep the handle alive: removing it unloads the search path.
+        _ZED_DLL_DIRECTORIES.add(key)
+        _ZED_DLL_HANDLES.append(handle)
+        return
+
+
+_ZED_DLL_DIRECTORIES: set[str] = set()
+_ZED_DLL_HANDLES: list[object] = []
 
 
 @dataclass(frozen=True)
@@ -255,22 +311,41 @@ class ZedCameraSource:
     """FrameSource implementation for the Stereolabs ZED SDK.
 
     The SDK is imported on first use, so importing the package does not require
-    it. The source returns the left image as BGR8 plus the SDK depth map in
-    millimetres. ``StreamHandler`` does not forward ``SourceFrame.depth`` yet;
-    the depth map stays available for the refresh stage.
+    it. The source returns the left image as RGB8 plus the SDK depth map in
+    metres. ``StreamHandler`` forwards ``depth``, ``depth_units``, and
+    ``intrinsics`` into the packet, so a ZED run uses real calibrated
+    intrinsics instead of the fixed-field-of-view estimate.
+
+    Depth convention: the project treats invalid depth as ``NaN``, never 0 and
+    never infinity. The SDK returns ``NaN``, 0, and ``inf`` for different
+    failure cases, so this source maps every non-finite, zero, or negative
+    value to ``NaN`` before it leaves the source. A caller in metres then needs
+    no special case.
     """
+
+    #: Depth reaches the packet in metres, matching the project convention.
+    DEPTH_UNITS = "metres"
 
     def __init__(
         self,
         camera_id: int = 0,
         source_id: str | None = None,
         resolution: str | object | None = None,
+        *,
+        fps: int = 30,
+        depth_mode: str = "QUALITY",
+        colour_view: str = "LEFT",
     ) -> None:
         self._sl = _load_zed_sdk()
         self.source_id = source_id or f"zed:{camera_id}"
         self.camera_id = camera_id
+        self.fps = int(fps)
+        self._depth_mode_name = str(depth_mode).upper()
+        self._colour_view_name = str(colour_view).upper()
+        # HD720 is the default: it matches the recorded replay clips, holds
+        # 30 fps with depth enabled, and is lighter than HD1080 on a laptop GPU.
         if resolution is None:
-            self.resolution = self._sl.RESOLUTION.HD1080
+            self.resolution = self._sl.RESOLUTION.HD720
         elif isinstance(resolution, str):
             try:
                 self.resolution = getattr(self._sl.RESOLUTION, resolution.upper())
@@ -278,10 +353,23 @@ class ZedCameraSource:
                 raise ValueError(f"Unknown ZED resolution: {resolution!r}") from error
         else:
             self.resolution = resolution
+        try:
+            self.depth_mode = getattr(self._sl.DEPTH_MODE, self._depth_mode_name)
+        except AttributeError as error:
+            raise ValueError(f"Unknown ZED depth mode: {depth_mode!r}") from error
+        # DEPTH_MODE.NONE captures RGB only. The depth map is skipped and the
+        # module is not requested from the SDK, so `depth` stays None and a
+        # downstream model can supply depth for the selected frames only.
+        self.depth_enabled = self._depth_mode_name != "NONE"
+        try:
+            self.colour_view = getattr(self._sl.VIEW, self._colour_view_name)
+        except AttributeError as error:
+            raise ValueError(f"Unknown ZED view: {colour_view!r}") from error
 
         self._zed = self._sl.Camera()
         self._image_mat = self._sl.Mat()
         self._depth_mat = self._sl.Mat()
+        self._runtime = self._sl.RuntimeParameters()
         self._intrinsics: tuple[float, float, float, float] | None = None
         self._opened = False
 
@@ -289,13 +377,16 @@ class ZedCameraSource:
         zed = self._sl
         init_params = zed.InitParameters()
         init_params.camera_resolution = self.resolution
-        init_params.depth_mode = zed.DEPTH_MODE.ULTRA
+        init_params.camera_fps = self.fps
+        init_params.depth_mode = self.depth_mode
         init_params.coordinate_units = zed.UNIT.MILLIMETER
         init_params.set_from_camera_id(self.camera_id)
 
         err = self._zed.open(init_params)
         if err != zed.ERROR_CODE.SUCCESS:
             raise SourceReadError(f"Failed to open ZED camera: {err}")
+        # Intrinsics must be read after a successful open; before that the call
+        # returns an empty configuration.
         self._intrinsics = self._read_intrinsics()
         self._opened = True
 
@@ -315,37 +406,52 @@ class ZedCameraSource:
         if not self._opened:
             raise SourceReadError("ZED source is not open")
 
-        if self._zed.grab() == zed.ERROR_CODE.SUCCESS:
-            self._zed.retrieve_image(self._image_mat, zed.VIEW.LEFT)
-            image = self._image_mat.get_data()
-            try:
-                import cv2
-            except ImportError as error:
-                raise SourceReadError("OpenCV is required for the ZED colour conversion") from error
-            # VIEW.LEFT normally returns BGRA. Convert explicitly: a plain
-            # channel slice keeps the alpha plane and can break on a padded
-            # stride.
-            if image.ndim == 3 and image.shape[2] == 4:
-                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
-            elif image.ndim == 3 and image.shape[2] == 3:
-                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            else:
-                raise SourceReadError(f"unexpected ZED image shape: {image.shape}")
-            rgb_image = np.ascontiguousarray(rgb_image)
+        if self._zed.grab(self._runtime) != zed.ERROR_CODE.SUCCESS:
+            raise SourceReadError("Failed to grab frame from ZED camera")
 
-            self._zed.retrieve_measure(self._depth_mat, zed.MEASURE.DEPTH)
-            depth_map = self._depth_mat.get_data().copy()
-            timestamp_ns = self._zed.get_timestamp(zed.TIME_REFERENCE.IMAGE).get_nanoseconds()
+        self._zed.retrieve_image(self._image_mat, self.colour_view)
+        image = self._image_mat.get_data()
+        try:
+            import cv2
+        except ImportError as error:
+            raise SourceReadError("OpenCV is required for the ZED colour conversion") from error
+        # VIEW.LEFT normally returns BGRA. Convert explicitly: a plain channel
+        # slice keeps the alpha plane and can break on a padded stride.
+        if image.ndim == 3 and image.shape[2] == 4:
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        elif image.ndim == 3 and image.shape[2] == 3:
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            raise SourceReadError(f"unexpected ZED image shape: {image.shape}")
+        rgb_image = np.ascontiguousarray(rgb_image)
 
-            return SourceFrame(
-                image=rgb_image,
-                pixel_format="RGB8",
-                source_timestamp_ns=timestamp_ns,
-                depth=np.ascontiguousarray(depth_map, dtype=np.float32),
-                depth_units="millimetres",
-                intrinsics=self._intrinsics,
-            )
-        raise SourceReadError("Failed to grab frame from ZED camera")
+        depth_m = self._read_depth_metres() if self.depth_enabled else None
+
+        timestamp_ns = int(self._zed.get_timestamp(zed.TIME_REFERENCE.IMAGE).get_nanoseconds())
+
+        return SourceFrame(
+            image=rgb_image,
+            pixel_format="RGB8",
+            source_timestamp_ns=timestamp_ns,
+            depth=depth_m,
+            depth_units=self.DEPTH_UNITS if depth_m is not None else None,
+            intrinsics=self._intrinsics,
+        )
+
+    def _read_depth_metres(self) -> np.ndarray:
+        """Return the depth map in metres with ``NaN`` for every invalid pixel.
+
+        A pixel is invalid when it is non-finite, zero, or negative. The SDK
+        uses ``inf`` for some no-measurement cases, and the project convention
+        accepts only ``NaN`` for unknown depth.
+        """
+        zed = self._sl
+        self._zed.retrieve_measure(self._depth_mat, zed.MEASURE.DEPTH)
+        depth_mm = self._depth_mat.get_data().astype(np.float32, copy=True)
+        valid = np.isfinite(depth_mm) & (depth_mm > 0.0)
+        depth_m = np.full(depth_mm.shape, np.nan, dtype=np.float32)
+        np.multiply(depth_mm, np.float32(0.001), out=depth_m, where=valid)
+        return np.ascontiguousarray(depth_m, dtype=np.float32)
 
     def close(self) -> None:
         if self._opened:
@@ -354,3 +460,41 @@ class ZedCameraSource:
 
     def health(self) -> StreamHealth:
         return StreamHealth.HEALTHY if self._opened else StreamHealth.CLOSED
+
+
+def zed_is_available() -> bool:
+    """True when the ZED SDK imports and at least one ZED camera is connected.
+
+    This never raises. It is used to decide whether the ``zed`` source can be
+    offered, so a machine without the SDK or without a camera keeps the webcam
+    path working.
+    """
+    try:
+        zed = _load_zed_sdk()
+    except (SourceReadError, ImportError, OSError):
+        return False
+    try:
+        return len(zed.Camera.get_device_list()) > 0
+    except Exception:
+        return False
+
+
+def describe_zed_devices() -> list[str]:
+    """Return one short description for each connected ZED camera.
+
+    The list is empty when the SDK or the cameras are absent. This never raises.
+    """
+    try:
+        zed = _load_zed_sdk()
+    except (SourceReadError, ImportError, OSError):
+        return []
+    try:
+        devices = zed.Camera.get_device_list()
+    except Exception:
+        return []
+    described: list[str] = []
+    for index, device in enumerate(devices):
+        model = getattr(device, "camera_model", "ZED")
+        serial = getattr(device, "serial_number", None)
+        described.append(f"{index}: {model}" + (f" (serial {serial})" if serial else ""))
+    return described

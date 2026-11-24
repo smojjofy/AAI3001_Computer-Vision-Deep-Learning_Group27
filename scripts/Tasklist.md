@@ -1,5 +1,12 @@
 # Scripts
 
+## Optional environment compositor
+
+- [ ] Keep the displayed splat visible while the next buffer sorts, and hold it across a pipeline generation change until a new state is ready.
+- [x] Add a browser-only Three.js view that imports one local GLB environment and shows the current published splat state in the same camera.
+- [x] Keep the existing live splat panel as the default. Bound replacement work to the newest frame and release viewer resources when the optional view closes.
+- [ ] Verify frame conversion, a local opaque GLB import, camera alignment, and close/reopen behavior.
+
 ## Device setup and live diagnostics
 
 - Purpose: repeatable setup and validation commands for each development device.
@@ -16,6 +23,9 @@
 - [x] Add C++ build, fixture preparation, and 3DGS PLY inspection utilities.
 - [x] Add direct source-view construction and reprojection validation command.
 - [x] Add a deterministic recorded-video replay command for baseline learning data.
+- [x] Add a paired-frame research trainer with 15 input channels and separate mask and motion heads. The first diagnostic run uses checked masks from one training session; it does not select a production checkpoint.
+- [x] Add a separate-session evaluator for the fixed mask checkpoint and the accepted baseline mask. It rejects a validation or test session that matches the training session.
+- [x] Compare bounded mask correction and paired training augmentation with the first absolute-mask checkpoint on the separate validation session. Keep all experiments out of the live path.
 - [ ] Add trained-model evaluation to that replay command.
 - [ ] Add schema validation and interface checks.
 - [ ] Add fixture preparation and cleanup helpers.
