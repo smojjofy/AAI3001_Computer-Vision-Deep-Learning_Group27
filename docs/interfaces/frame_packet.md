@@ -1,7 +1,7 @@
-# FramePacket: Stream Handler to Frame Processor
+# FramePacket: Stream Handler to Optical Flow and Reranker
 
 `FramePacket` represents exactly one decoded input image. It is the boundary
-between capture and image processing; it intentionally contains no depth, pose,
+between capture and the downstream pipeline; it intentionally contains no depth, pose,
 segmentation, alpha, flow, or splat data.
 
 The GUI's read-only preview may encode the newest packet as a smaller JPEG

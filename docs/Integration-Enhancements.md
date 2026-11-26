@@ -1,19 +1,20 @@
 # Enhancements: what we attempted after the live pipeline worked
 
-This document continues `docs/INTEGRATION_HISTORY.md`. The integration phase
-produced a working live application, a verified identity and display contract, and
-a prompt to run the physical tests. This document records what we attempted after
-that point: four lines of work, their measured results, and what each attempt
-proved or failed to prove.
+This document continues `docs/Integration.md`. The integration phase produced a
+working live application, a verified identity and display contract, and a prompt to
+run the physical tests. This document records what was attempted after that point:
+four lines of work, their measured results, and what each attempt proved or failed
+to prove.
 
-I write this as a failure record as well as a result record, because three of the
+This document is a failure record as well as a result record, because three of the
 four lines produced a rejected or withdrawn claim. A reader who wants only the
 final state can read section 1 and section 7. A reader who wants to know why the
 current mask is a depth-gradient watershed, why the poll interval is still 300 ms,
 and why no trained model exists yet needs the whole document.
 
 Measurements are the values recorded when the work happened. Where a later attempt
-withdrew an earlier measurement, I show both and state which one stands.
+withdrew an earlier measurement, both are shown, and the document states which one
+stands.
 
 ## 1. Overview and verdicts
 
@@ -91,9 +92,9 @@ Initializing the Depth+Pose Pipeline to an initial frame with no Pose and only t
 
 **Freeze by construction.** The calibrator collects only during an explicit
 capture and never learns while running. A person therefore cannot be absorbed into
-the baseline, which was the overfitting failure mode the user identified before we
-wrote any code. This property was correct and it stayed correct. The feature failed
-for a different reason.
+the baseline, which was the overfitting failure mode identified before any code was
+written. This property was correct and it stayed correct. The feature failed for a
+different reason.
 
 #### 3.1.3 The first comparison failed
 
@@ -146,8 +147,9 @@ The joint constants are declared in the module: `MIN_JOINT_VISIBILITY = 0.15`,
 
 On a paired live frame, the face box contained background depth up to 2.26 m while
 the pose joints reported about 0.75 m. Those stray background-depth pixels became
-splats inside the face, which is the warping the user saw. Construction validity
-is now limited to the joint-depth range, so those pixels produce no splats.
+splats inside the face, which is the warping that was observed in the viewer.
+Construction validity is now limited to the joint-depth range, so those pixels
+produce no splats.
 
 #### 3.2.4 Limitations
 
@@ -252,7 +254,7 @@ does not import it.
 
 ### 6.3 The review of the harness: three real defects and findings of mine that were wrong
 
-I reviewed the harness myself before we spent 37 minutes per clip on it, and I
+A review of the harness ran before 37 minutes per clip were spent on it, and it
 found things that changed the run cost:
 
 - **The reuse path repeats full inference.** Every reuse window ran MediaPipe pose
@@ -261,15 +263,15 @@ found things that changed the run cost:
 - **A failed run blocks the next run.** `split.json` was written before the replay
   started, so a second run on the same clip raised `FileExistsError`.
 
-Some of my other findings in that review were then **wrong**, and I recorded the
-corrections:
+Three other findings from that review were then **wrong**, and the corrections are
+recorded:
 
-- I said the reuse path did not apply the live validity gate and could disagree
-  with live mask pixels. Wrong, for the reason in section 4.5.
-- I proposed reusing the retained reference estimates for reuse rows to reduce
-  cost. That would break the 15-channel input contract, because the input needs
+- The claim that the reuse path did not apply the live validity gate and could
+  disagree with live mask pixels was wrong, for the reason in section 4.5.
+- The proposal to reuse the retained reference estimates for reuse rows to reduce
+  cost would break the 15-channel input contract, because the input needs
   estimates that belong to the *selected* frame. Repeated inference stays.
-- My "9-fold disk reduction" was a projection and not a measurement of file
+- The "9-fold disk reduction" was a projection and not a measurement of file
   categories.
 
 The decisions that followed are worth restating because they are counter-intuitive:
@@ -289,17 +291,18 @@ The decisions that followed are worth restating because they are counter-intuiti
 - **Reports live outside the replay data**, and a report directory inside it is
   refused.
 
-I also corrected my own timing estimate: 3 minutes at 30 frames/s is 5,400 frames,
-and 5,400 / 100 x 59.2 s is 53.3 minutes, not the 30 minutes I first wrote.
+The timing estimate was also corrected: 3 minutes at 30 frames/s is 5,400 frames,
+and 5,400 / 100 x 59.2 s is 53.3 minutes, not the 30 minutes first written.
 
 ### 6.4 Measured on the real clip
 
-The user recorded `data/recordings/replay_1.mp4`: 1280 x 720, 30.07 frames/s, 3,481
-frames, 115.8 s. Their own replay run was stopped at 5.2 minutes. It had written
-165 rows (frames 1 to 778, clip time 0 to 25.8 s) and no `manifest.json`, so it was
-incomplete. I kept it as `movement_01.partial-20261121T1437` and did **not** delete
-it. The full extraction with `--staged-output` then completed in **37.1 minutes**
-and published `data/processed/learning_replay/person_pilot_01/movement_01` with
+The clip `data/recordings/replay_1.mp4` was recorded for this work: 1280 x 720,
+30.07 frames/s, 3,481 frames, 115.8 s. The first replay run was stopped at 5.2
+minutes. It had written 165 rows (frames 1 to 778, clip time 0 to 25.8 s) and no
+`manifest.json`, so it was incomplete. It was kept as
+`movement_01.partial-20261121T1437` and **not** deleted. The full extraction with
+`--staged-output` then completed in **37.1 minutes** and published
+`data/processed/learning_replay/person_pilot_01/movement_01` with
 `staged_output: true` and no staging directory left.
 
 | Measure | Value |
@@ -311,9 +314,9 @@ and published `data/processed/learning_replay/person_pilot_01/movement_01` with
 | Output size | 7.36 GB, about 10 MB per row, 9.6 MB of it the depth file |
 | Projected time for this clip | about 35 minutes; measured 37.1 minutes, so the projection held |
 
-The per-row size is about four times my earlier 2.5 MB estimate, because the clip is
-720p rather than 640 x 480. Disk free was 865 GB, so this remains a non-issue, but
-the estimate was wrong and the document says so.
+The per-row size is about four times the earlier 2.5 MB estimate, because the clip
+is 720p rather than 640 x 480. Disk free was 865 GB, so this remains a non-issue,
+but the estimate was wrong and the document says so.
 
 **The strongest result in the whole replay line.** We added an additive replay
 field `mask_pose` that stores the unrounded joints that mask selection actually
@@ -448,18 +451,18 @@ frames decide the stride question, so they come first. The full set is 45 frames
 
 ### 7.2 Also open
 
-- **A rule I proposed that needs a decision.** I count a refresh row without a
-  `flow` file as ineligible for the 15-channel set, because the input needs flow.
-  That rule is proposed and not yet confirmed or rejected.
+- **A proposed rule that needs a decision.** A refresh row without a `flow` file is
+  treated as ineligible for the 15-channel set, because the input needs flow. That
+  rule is proposed and not yet confirmed or rejected.
 - **A separate recording session for the `test` split.** The pilot clip is used for
   research and review. A trained model that is accepted needs an untouched session.
 - **The physical P1 to P5 gate, again.** The rehearsal in section 2 passed on the
   **depth-band** mask. That mask was then replaced by the pose-gradient mask. No
   physical session has repeated P1 to P5 on the current code. The physical gate is
   therefore still open for the code that the demonstration runs today.
-- **Step timings for the 2-minute clip.** We can identify the exit window from the
-  data, but not the other steps. Approximate action times from the user would let us
-  label clip segments. Image review can proceed without them.
+- **Step timings for the 2-minute clip.** The exit window can be identified from the
+  data, but not the other steps. Approximate action times for the clip would let the
+  segments be labelled. Image review can proceed without them.
 - **The GPU budget for a research model.** The learning plan requires a measured
   budget before the model resolution is fixed: pose + depth plus one model forward,
   with median and p95 time, `torch.cuda.max_memory_allocated()`, and the effect on
@@ -503,7 +506,7 @@ and each one has a specific failure behind it.
 
 ## References
 
-- `docs/INTEGRATION_HISTORY.md`: the phase that this document continues.
+- `docs/Integration.md`: the phase that this document continues.
 - `docs/integration.md`: the operating guide and the state machine.
 - `docs/physical_test_checklist.md`: P1 to P5.
 - `docs/LEARNING_REPLAY_PERSON_TEST_CHECKLIST.md`: recording, replay, inspection,

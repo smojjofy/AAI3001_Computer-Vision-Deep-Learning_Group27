@@ -7,6 +7,19 @@ segmented, assigned relative depth, converted to splats, and temporally smoothed
 It is not a complete, metric 3D scan. One fixed camera cannot observe hidden
 surfaces and monocular depth has no guaranteed real-world scale.
 
+## Team and component ownership
+
+Five students built the pipeline, one per work package. Each member owned the
+stages listed here, and the integrated application is the join of all five.
+
+| Member | Work package |
+| --- | --- |
+| Jaison | Pipeline architecture, Splat Constructor, and integration |
+| ZeKai | Preliminary research and ZED SDK exploration |
+| Ziven | Stream Handler, Optical Flow processor, and Reranker |
+| Jaziel | DepthAnything and YOLO depth processor |
+| Brejesh | MediaPipe pose processor |
+
 ## Integrated application (final milestone)
 
 The `applications/` tree now runs the complete local pipeline:

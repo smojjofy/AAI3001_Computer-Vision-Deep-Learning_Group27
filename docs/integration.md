@@ -5,8 +5,8 @@ decided, what we measured, what failed, and what remained open. Dates are the
 dates on which the work happened, and the round order is the order of review and
 repair.
 
-The companion document `docs/ENHANCEMENTS.md` continues from the point where this
-document stops.
+The companion document `docs/Integration-Enhancements.md` continues from the point
+where this document stops.
 
 Where this document and `docs/integration.md` overlap, `integration.md` is the
 operating guide and this document explains why each rule exists. This document
@@ -69,7 +69,7 @@ engineering days, and person segmentation was the largest single gap.
 
 ## 2. Consolidation
 
-The user approved a sixth component, `live-splat-pipeline/`, on a new branch
+The project approved a sixth component, `live-splat-pipeline/`, on a new branch
 `integration`. It was created from `origin/main` and merged three branches:
 `origin/brejesh/gui`, `origin/jaziel/merge-depth-pose`, and
 `origin/jaison/splat-constructor`. The constructor work had never been merged
@@ -92,13 +92,13 @@ The consolidation build passed 65 tests with 7 skipped. The skips needed
 
 ## 3. Binding scope decisions
 
-We fixed the scope with the user before implementation started. These decisions
-shaped everything that followed, so I record them with their reasons.
+We fixed the scope before implementation started. These decisions shaped everything
+that followed, so each one is recorded here with its reason.
 
 - **One computer, not two.** A two-device layout (capture on one machine,
-  construction and viewer on another) was the earlier plan. The user set the
-  current milestone to one computer and deferred the two-device layout. This
-  removed all network transport from the acceptance gates.
+  construction and viewer on another) was the earlier plan. The current milestone is
+  one computer, and the two-device layout is deferred. This removed all network
+  transport from the acceptance gates.
 - **Flow-only selection.** Optical flow runs for every candidate frame. The
   reranker selects one frame in each 100 ms window by flow magnitude alone. Depth
   runs only for the selected frame, and a depth threshold then makes the person
@@ -106,14 +106,14 @@ shaped everything that followed, so I record them with their reasons.
   because it needed a mask for every candidate, which needs depth for every
   candidate.
 - **Background motion is accepted.** A window can be won by background motion
-  rather than by the person. The user accepted this trade-off. The 500 ms timed
-  refresh covers a scene with little motion. The timer *requests* a refresh and
-  does not make an invalid result active.
+  rather than by the person. This trade-off was accepted. The 500 ms timed refresh
+  covers a scene with little motion. The timer *requests* a refresh and does not
+  make an invalid result active.
 - **One binary mask** feeds both the constructor and opacity.
 - **The retained reference advances only after a successful construction.** A
   failed refresh must not authorise a later reuse decision.
-- **The final demonstration is the browser application.** The user chose a
-  Vite GUI with a Gaussian renderer, and this GUI is the deliverable.
+- **The final demonstration is the browser application.** A Vite GUI with a
+  Gaussian renderer is the deliverable.
 
 ## 4. The renderer decision and its recorded deviation
 
@@ -129,11 +129,11 @@ GUI work. We tested three candidates with a synthetic 5000-splat person cloud:
 We chose `gsplat`, because it needed the least code and it mapped onto the
 constructor convention with a single camera rotation of 180 degrees about X.
 
-This decision carries a deviation that I state in every document that describes
-the renderer: **`gsplat` is a standalone WebGL2 renderer and is not part of a
-three.js scene.** The three.js-native alternative works and remains the fallback
-if the requirement is read strictly. `docs/integration.md` records this deviation
-in its known limits, and this document does not soften it.
+This decision carries a deviation that this document states in every place that
+describes the renderer: **`gsplat` is a standalone WebGL2 renderer and is not part
+of a three.js scene.** The three.js-native alternative works and remains the
+fallback if the requirement is read strictly. `docs/integration.md` records this
+deviation in its known limits, and this document does not soften it.
 
 ## 5. The delivered pipeline
 
@@ -194,9 +194,10 @@ one day. This was the correct outcome of a review, and it set the pattern for th
 rest of the phase: a delivered slice, an independent review, a repair commit with
 a focused test, and a re-review.
 
-I list the repair rounds as a table. Each row states the stimulus, the root cause,
-and the test that now covers it. The rounds are in the order that they happened.
-This table is the evidence that the integration was verified rather than assumed.
+The repair rounds are listed as a table. Each row states the stimulus, the root
+cause, and the test that now covers it. The rounds are in the order that they
+happened. This table is the evidence that the integration was verified rather than
+assumed.
 
 | Round | Defect | Root cause | Repair and covering test |
 | --- | --- | --- | --- |
@@ -204,8 +205,8 @@ This table is the evidence that the integration was verified rather than assumed
 | 1 | The browser recorded a new frame ID before the in-flight gate, so a new state could be skipped. | The fetch gate returned early after the ID had already been recorded as requested. | Keep a pending identity and start the fetch when the running one finishes. Same rule for the mask and pose-depth paths. |
 | 1 | The splat alpha did not advance after the first response, so a lost person never faded. | Alpha was computed only inside the `/api/splat` response, and the browser fetches only on a new frame ID. | The server latches the loss event. The browser runs the hold and fade on its own clock. |
 | 1 | Reuse motion was applied to a splat that it did not belong to. The saved screenshot shows splat frame 403 with motion reference 400. | Motion had no identity check. | Motion applies only when `(source_id, generation, reference_frame_id)` equals the displayed splat identity and the candidate frame is later than that reference. |
-| 2 | My first repair of the corner-touching mask was also broken. `np.maximum(padded, 1 - padded)` is 1 at every pixel of a binary mask, so the repair would have turned every mask into the full frame. | The corrected algorithm mixed the original component into the flood result. | Keep the original component separate and add only the unreachable holes. The review found this before the commit, because the review ran the tests instead of reading the diff. |
-| 2 | The proposed "camera-view warp with a pluggable camera model" is algebraically the same operation as the current source-view warp. | The proposed projection and the existing offset both reduce to `delta_X = flow_u * depth / fx` and `delta_Y = -flow_v * depth / fy`. | We recomputed both forms on a worked example: identical to 1e-9. The source-view warp stayed, and its orbit limit is documented. The user then confirmed this choice. |
+| 2 | The first repair of the corner-touching mask was also broken. `np.maximum(padded, 1 - padded)` is 1 at every pixel of a binary mask, so the repair would have turned every mask into the full frame. | The corrected algorithm mixed the original component into the flood result. | Keep the original component separate and add only the unreachable holes. The review found this before the commit, because the review ran the tests instead of reading the diff. |
+| 2 | The proposed "camera-view warp with a pluggable camera model" is algebraically the same operation as the current source-view warp. | The proposed projection and the existing offset both reduce to `delta_X = flow_u * depth / fx` and `delta_Y = -flow_v * depth / fy`. | We recomputed both forms on a worked example: identical to 1e-9. The source-view warp stayed, and its orbit limit is documented. This choice was then confirmed. |
 | 3 | A refresh that started in one generation could publish in the next. We reproduced an old frame committed under generation 1 after generation 0 was reset. | The pipeline read a mutable generation value when the job finished. | Each job carries an immutable generation. The worker rejects a stale job before processing it and again before publishing. `WindowSelector.commit(packet, generation)` rejects a stale commit. |
 | 3 | The candidate window survived a generation reset, so an old candidate could become the new bootstrap selection. | The reset cleared the reference but not the window. | A run change clears the window and its timing state. The flush drops candidates from another generation. |
 | 3 | A camera reopen was not detected. | A live OpenCV source supplies no source timestamp, so the timestamp checks saw nothing. | Watch `StreamHandler.metrics.reconnect_count` in addition to source ID, dimensions, timestamp origin, and backward time. |
@@ -238,11 +239,11 @@ This table is the evidence that the integration was verified rather than assumed
 | 14 | The estimate counted part of the request twice. | `stateAge` and the browser request interval overlapped. | The estimate adds three disjoint intervals only: capture age, server state age, and browser render wait. The browser request interval is excluded on purpose. |
 | 14 | The label could publish before the new splat data was drawn. | A same-count descriptor update can return with buffers detached, and the first pack for a new object is asynchronous. | `stateDataReady()` requires attached data, applied descriptors, a matching buffer length, and the renderer's sorted indices. The panel writes `data-latency-frame`, `data-latency-count`, and `data-latency-sorted-count` only for the drawn state, and the browser check reads them. |
 
-Two defects in this phase came from me and were recorded in the same round as the
-repair, because a repair record that hides its own errors is not evidence:
+Two defects in this phase were recorded in the same round as the repair, because a
+repair record that hides its own errors is not evidence:
 
-- The pose import path in `_import_pose_estimator` was repaired, and I first
-  attributed two test failures to module caching. The real cause was that bare
+- The pose import path in `_import_pose_estimator` was repaired, and two test
+  failures were first attributed to module caching. The real cause was that bare
   `python` resolved to the system interpreter without `mediapipe`. The lesson is
   in the workspace habit file (`_agent-habit.md`): compare `sys.prefix` with
   `sys.base_prefix` before diagnosing a missing module.
@@ -252,16 +253,15 @@ repair, because a repair record that hides its own errors is not evidence:
 
 The screenshot helper also changed in this phase. The earlier helper controlled
 Microsoft Edge through the DevTools protocol and terminated every running Edge
-process, including the user's own browser. It was replaced by
+process, including an operator's own browser. It was replaced by
 `applications/gui/tools/capture-firefox.py`, which runs headless Firefox through
-Selenium with an isolated temporary profile and never touches the user's browser.
+Selenium with an isolated temporary profile and never touches an operator's browser.
 
 ## 7. Phase 2: measurement and operator support
 
 After the repair rounds closed, Phase 2 added measurement and operator support.
-The user gave two instructions for this phase: use the habit file, and trace and
-test the boundaries that each change affects instead of only the contract it was
-written for.
+Two instructions governed this phase: use the habit file, and trace and test the
+boundaries that each change affects instead of only the contract it was written for.
 
 - **Latency is the sum of all stages.** `pose_depth`, `mask`, `construct`, and
   `pose_preview` are measured, and `total` is their sum. The earlier total left
@@ -288,9 +288,9 @@ and that is where the last rows of the table in section 6 come from.
 
 ## 8. Two contracts that everything later depends on
 
-Every enhancement in the companion document relies on the two contracts below. I
-state them separately because a reader who understands only these two contracts
-can follow most of the code.
+Every enhancement in the companion document relies on the two contracts below. They
+are stated separately because a reader who understands only these two contracts can
+follow most of the code.
 
 ### Contract A: identity is `(source_id, generation, frame_id)`
 
@@ -342,10 +342,10 @@ starts it. Other inference failures are separate and never set the latch.
 | `docs/physical_test_checklist.md` P1 to P5 | The behaviour with a real person in front of a real camera. | Nothing else. This is the only acceptance evidence for person behaviour. |
 
 The physical tests are the only acceptance gate that a computer cannot satisfy
-alone. We recorded no physical test while the user was away from the machine, and
-we produced `docs/physical_test_checklist.md` instead. We must keep that
-discipline, because a claim of person behaviour that nobody observed is the one
-claim this project cannot defend.
+alone. No physical test was recorded while the operator was away from the machine,
+and `docs/physical_test_checklist.md` was produced instead. That discipline must be
+kept, because a claim of person behaviour that nobody observed is the one claim
+this project cannot defend.
 
 At the end of the integration phase the reported suite result was between 145 and
 152 tests depending on which optional packages were installed in the environment
@@ -374,4 +374,4 @@ work raised the suite to 264 tests.
   measured results.
 - `docs/physical_test_checklist.md`: P1 to P5, with commands and the evidence to
   return.
-- `docs/ENHANCEMENTS.md`: the work that followed this phase.
+- `docs/Integration-Enhancements.md`: the work that followed this phase.

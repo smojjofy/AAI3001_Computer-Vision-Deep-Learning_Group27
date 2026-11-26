@@ -1,8 +1,9 @@
-# Reranker: Flow Observation to Frame Processor
+# Reranker: Flow Result to Selection Decision
 
 The reranker is a one-reference replacement cache, not a reconstruction-quality
-model. It receives each `FlowObservation` from Optical Flow and owns exactly
-one retained camera frame: the last frame it marked significant, together with
+model. It receives reference-to-current `FlowResult` data for selected frames
+and owns exactly one retained camera frame: the last frame it marked
+significant, together with
 its identity and comparison metadata. It does not retain every frame and never
 reads the Temporal Cache's splat state. For each incoming frame it asks:
 
@@ -10,7 +11,8 @@ reads the Temporal Cache's splat state. For each incoming frame it asks:
 Is this frame significantly different from the retained significant frame?
 ```
 
-It then emits a `SelectionDecision` with exactly one action:
+It then emits a `SelectionDecision` with exactly one action. The intended
+downstream routing is:
 
 - `reuse`: the Frame Processor sends the original `FramePacket` and its
   matching `FlowResult` to the Temporal Cache. No depth, foreground, or motion
@@ -34,11 +36,10 @@ sources when timestamps share an origin and increase. An optional
 Neither limit requires storing the intervening images. Validate the time limit
 against subject motion and downstream refresh cost.
 
-`SelectionDecision` must preserve `source_id`, selected frame ID, capture
+`SelectionDecision` preserves `source_id`, selected frame ID, capture
 timestamp, and the matching flow's current-frame identity. A bounded queue may
 skip IDs, so consumers must not infer adjacency from frame numbers. Estimator
-completion order is irrelevant: refresh results are joined by this identity
-before Splat Construction.
+completion order must be handled by downstream consumers using this identity.
 
 The implementation is `modules/reranker`. `StreamRerankerConsumer` directly
 links the Stream Handler queue to a DIS or RAFT estimator: it passes the
@@ -46,7 +47,8 @@ reranker's retained frame as the previous flow frame and the dequeued packet as
 the current frame. This ensures the difference score is reference-to-current,
 not merely adjacent-frame motion.
 
-The initial implementation should make deterministic threshold decisions and
-record the measured difference score. It should not learn a ranking model until
-recorded replay shows that a hand-tuned threshold cannot meet latency and
-reconstruction-stability targets.
+The current implementation makes deterministic threshold decisions and records
+the measured difference score when flow is valid. A learned ranking model is
+not part of the implemented path. The threshold and scheduling decisions are
+recorded in [the integration history](../Integration.md) and the live diagnostic
+results in [the integration guide](../integration_runbook.md).

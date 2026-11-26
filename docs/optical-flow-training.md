@@ -1,5 +1,10 @@
 # Optical-flow CNN training plan
 
+This is an **optional future plan**. The current demo uses Torchvision's
+pretrained RAFT Small weights; no project-specific fine-tuning is required to
+run the stream-to-reranker path. The measured DIS/RAFT comparison and commands
+are in [the device verification guide](optical-flow-device-verification.md).
+
 ## First model and comparison
 
 Use Torchvision RAFT Small with its pretrained `DEFAULT` weights as the first CNN.

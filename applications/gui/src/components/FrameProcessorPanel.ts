@@ -25,6 +25,16 @@ const TAB_LABELS: Record<ProcessorView, string> = {
   motion: 'Motion',
 }
 
+/**
+ * The tabs the panel offers, in order.
+ *
+ * The 'motion' view is kept in ProcessorView, in TAB_LABELS, and in the whole
+ * setMotion path so the reuse payload, the polling, and the arrow drawing keep
+ * working. It is omitted here only, so the tab is not offered in the GUI. Restore
+ * it by adding 'motion' to this list.
+ */
+const TAB_ORDER: ProcessorView[] = ['rgba', 'mask', 'depth']
+
 export interface PreviewMeta {
   frameId: number
   sourceId: string
@@ -66,7 +76,7 @@ export class FrameProcessorPanel {
     this.element = document.createElement('section')
     this.element.className = 'viewer-panel'
 
-    const tabButtons = (Object.keys(TAB_LABELS) as ProcessorView[])
+    const tabButtons = TAB_ORDER
       .map(
         (view) => `
           <button class="processor-tab" data-view="${view}" type="button">
