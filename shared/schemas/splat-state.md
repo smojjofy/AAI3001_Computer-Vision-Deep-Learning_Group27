@@ -1,8 +1,9 @@
 # SplatState v1
 
-`SplatState` is the in-memory boundary from Splat Constructor to Temporal
-Cache. PLY and metadata JSON are diagnostic/export artifacts, not the runtime
-contract.
+`SplatState` is the in-memory boundary from Splat Constructor to downstream
+consumers. The live application keeps one active state and sends its arrays to
+the browser. PLY and metadata JSON are diagnostic/export artifacts, not the
+runtime contract. See the [representation guide](../../docs/splat-representation-and-runtime.md).
 
 The state preserves `frame_id`, `timestamp_ns`, `source_id`, source dimensions,
 camera intrinsics, row-major `camera_to_world`, and source depth semantics and
@@ -20,9 +21,10 @@ units. It owns one structure-of-arrays Gaussian collection:
 | `source_pixels` | `M x 2` uint32 | Source image `(u,v)` association |
 
 The identity of a frame-local candidate is the tuple
-`(source_id, frame_id, local_id)`. Persistent cross-frame IDs are assigned by
-the Temporal Cache after matching/fusion; the constructor does not claim that
-the same pixel identifies the same physical point over time.
+`(source_id, frame_id, local_id)`. The current live application does not assign
+persistent cross-frame IDs. A future Temporal Cache could assign them after
+matching and fusion. The constructor does not claim that the same pixel
+identifies the same physical point over time.
 
 Constructor positions are transformed into world space by `camera_to_world`.
 The initial opacity incorporates `reconstruction_weights`; the explicit weight

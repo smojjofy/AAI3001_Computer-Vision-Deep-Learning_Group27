@@ -47,7 +47,7 @@ def test_summarize_ms_skips_missing_and_non_finite() -> None:
 
 
 def test_summarize_ms_even_sample_count_uses_nearest_rank() -> None:
-    # RT-0043 item 4: an even count must not pick the upper middle sample.
+    # An even count must not pick the upper middle sample.
     summary = summarize_ms([1.0, 2.0, 3.0, 4.0])
     assert summary is not None
     assert summary["p50"] == 2.0

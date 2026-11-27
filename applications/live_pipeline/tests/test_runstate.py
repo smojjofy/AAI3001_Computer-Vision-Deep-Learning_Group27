@@ -116,7 +116,7 @@ def test_drain_queue_is_safe_when_empty() -> None:
 
 
 def test_packet_tracker_detects_one_change_then_trusts_the_new_baseline() -> None:
-    # RT-0028 item 2: after a permanent source change, the next packet must
+    # After a permanent source change, the next packet must
     # become the baseline instead of causing a run change on every packet.
     tracker = PacketRunTracker()
     first = packet(1)

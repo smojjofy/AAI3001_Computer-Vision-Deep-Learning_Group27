@@ -4,7 +4,12 @@ tmp*
 /data/recordings/
 /data/processed/
 /checkpoints/
-/outputs/
+# Only the aligned reconstruction-validation fixture can enter Git.
+/outputs/*
+!/outputs/traintest_inverted_050/
+/outputs/traintest_inverted_050/*
+!/outputs/traintest_inverted_050/relative_inverse_depth.png
+!/outputs/traintest_inverted_050/foreground_mask.png
 /build/
 /modules/unreal_adapter/
 
@@ -23,3 +28,6 @@ __pycache__/
 # Local scratch
 .tmp/
 *.egg-info/
+
+# Experiment variants kept outside the milestone code
+/TEST-noOptic/

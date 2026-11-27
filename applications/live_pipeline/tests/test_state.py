@@ -55,7 +55,7 @@ def decode_png(data: bytes) -> np.ndarray:
 
 
 def test_mask_response_pairs_mask_and_identity_atomically() -> None:
-    # RT-0026 item 1: a reader must never see the mask of one state with the
+    # A reader must never see the mask of one state with the
     # identity of another. Two writers publish a recognisable mask/identity
     # pair while the reader checks the pair.
     import threading
@@ -202,7 +202,7 @@ def test_splat_response_reports_loss_without_forcing_alpha() -> None:
 
 
 def test_clear_active_drops_the_old_run_state() -> None:
-    # RT-0030 item 1: a run change must not leave an old snapshot, identity,
+    # A run change must not leave an old snapshot, identity,
     # loss latch, or motion beside the new run generation.
     state = PipelineState()
     publish(state)
@@ -229,7 +229,7 @@ def test_clear_active_drops_the_old_run_state() -> None:
 
 
 def test_clear_active_clears_stored_diagnostics() -> None:
-    # RT-0032 item 2: a run boundary must not serve the previous run's action,
+    # A run boundary must not serve the previous run's action,
     # splat summary, or error.
     state = PipelineState()
     publish(state)

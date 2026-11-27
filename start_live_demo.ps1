@@ -209,12 +209,20 @@ $innerCommand = @(
     "& '$python' $quotedArgs 2>&1 | Tee-Object -FilePath '$outLog'",
     'Write-Host ""',
     'Write-Host "Pipeline stopped. Press Enter to close this window." -ForegroundColor Yellow',
-    'Read-Host | Out-Null'
+    $(if ($DurationS -le 0) { 'Read-Host | Out-Null' })
 ) -join [Environment]::NewLine
 $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($innerCommand))
 $windowArgs = @('-NoProfile', '-EncodedCommand', $encodedCommand)
 
-$appProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $windowArgs -PassThru
+$startOptions = @{
+    FilePath = 'powershell.exe'
+    ArgumentList = $windowArgs
+    PassThru = $true
+}
+if ($NoBrowser -and $DurationS -gt 0) {
+    $startOptions.WindowStyle = 'Hidden'
+}
+$appProcess = Start-Process @startOptions
 Write-Step "Pipeline window started (PID $($appProcess.Id)). Log: $outLog"
 
 # Wait for the app to answer, then for one published splat state. The first

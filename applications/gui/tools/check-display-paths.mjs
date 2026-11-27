@@ -1,5 +1,5 @@
 /*
- * Executable delayed-response check for the viewer fetch paths (RT-0038).
+ * Executable delayed-response check for the viewer fetch paths.
  *
  * Unlike the pure-helper checks, this script runs the real async fetch runner
  * (`runFetchWithEpoch`) with controlled delays and epoch changes, and it traces
@@ -160,7 +160,7 @@ function delay(ms, value) {
   ).length > 20)
 }
 
-// 7. Capture-to-display estimate boundaries (RT-0048 item 1).
+// 7. Capture-to-display estimate boundaries.
 {
   // Disjoint intervals: capture age, publish-to-response age, decoded-response
   // to render. A browser request that starts inside the publish-response window

@@ -170,7 +170,7 @@ def test_commit_stamps_the_current_generation() -> None:
 
 
 def test_commit_rejects_a_stale_generation() -> None:
-    # RT-0024 item 1: a refresh started in generation 0 must not commit after a
+    # A refresh started in generation 0 must not commit after a
     # reset to generation 1.
     window = selector(1.0)
     window.set_generation(0)

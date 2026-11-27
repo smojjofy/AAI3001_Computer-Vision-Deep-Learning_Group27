@@ -97,7 +97,7 @@ def test_motion_preview_preserves_frame_identity() -> None:
 
 
 def test_motion_rejected_when_reference_is_not_the_active_splat() -> None:
-    # RT-0019 item 2 / RT-0018 A4: motion reference 400 must not move splat 403.
+    # Motion reference 400 must not move splat 403.
     item = candidate(frame_id=406, reference_frame_id=400)
     assert build(item, splat_frame_id=403) is None
 

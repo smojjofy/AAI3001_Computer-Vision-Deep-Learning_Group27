@@ -534,7 +534,7 @@ def evaluate_labelled(
                 "has_depth": depth is not None,
             }
         )
-        # Hand and head regions follow RT-0077: head first because it is the
+        # Check the head first because it is the
         # reported weak region; hands are added when the joints are visible.
         region_groups = (
             ("head", tuple(range(0, 13))),
@@ -682,7 +682,7 @@ def training_eligibility(
 ) -> dict:
     """Decide which replay pairs may enter the first 15-channel set.
 
-    RT-0077 rules. A pair needs a complete reference and selected frame, flow,
+    A pair needs a complete reference and selected frame, flow,
     the selected depth, the exact ``mask_pose``, a successful selected row, and a
     checked person-mask label. Failed rows, the bootstrap row, and the no-pose
     fallback rows are excluded with their own reasons. ``baseline_mask`` is an

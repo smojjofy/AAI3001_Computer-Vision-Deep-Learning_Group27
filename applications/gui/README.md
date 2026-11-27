@@ -1,20 +1,23 @@
 # Live Splat Viewer (GUI)
 
-Vite + TypeScript viewer for the integrated local pipeline. The browser does not
-open the camera. It polls the local HTTP API on `127.0.0.1:8765` through the Vite
-`/api` proxy.
+The milestone web app displays the captured frame, selected mask, depth and
+pose previews, diagnostics, and the newest Gaussian splat state. Its main
+viewer uses `gsplat`. An optional Three.js view can import a `.glb`
+environment and display the same splat frames. The browser does not open
+the camera. In the integrated run, the backend serves the built GUI and
+local HTTP API on `127.0.0.1:8765`. The Vite `/api` proxy serves development
+runs. The [milestone workflow](../../docs/single-camera-workflow.md)
+describes the full path.
 
 ## Panels
 
 - **Original Input** — the latest RGB preview frame (`/api/preview`) with frame
   ID, source ID, and capture time. Shows LIVE, CAMERA CLOSED, or PREVIEW
   DISCONNECTED in the top bar.
-- **Frame Processor Output** — four live tabs:
+- **Frame Processor Output** — three live tabs:
   - `RGBA`: the same preview JPEG,
-  - `Mask`: `/api/mask` depth-threshold person mask (PNG),
-  - `Depth`: `/api/pose-depth` colourised depth image,
-  - `Motion`: `/api/motion` reuse flow field drawn as a magnitude heat map with
-    direction arrows.
+  - `Mask`: `/api/mask` selected person mask (PNG),
+  - `Depth`: `/api/pose-depth` colourised depth image.
   Every tab shows a waiting state when the endpoint returns HTTP 204.
 - **Inference Diagnostics** — live `/api/diagnostics`: reuse/refresh decision and
   reason, flow score against threshold, cache age, refresh counters, stage
@@ -25,8 +28,8 @@ open the camera. It polls the local HTTP API on `127.0.0.1:8765` through the Vit
   FPS, and `display_alpha` are in the footer. When `/api/motion` provides a reuse
   flow field, the panel samples it at each splat source pixel and offsets only the
   displayed positions in view space; base positions are never changed. See the
-  comments in `src/components/SplatOutputPanel.ts` for the coordinate conversion
-  and the body-region warp heuristic.
+  [representation guide](../../docs/splat-representation-and-runtime.md) for
+  the coordinate conversion and the body-region warp heuristic.
 
 The splat state is fetched only when `/api/diagnostics` reports a new
 `splat.frame_id` (diagnostics poll: 300 ms). No mock splat data is rendered.

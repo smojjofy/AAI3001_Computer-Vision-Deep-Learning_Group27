@@ -40,7 +40,7 @@ from scripts.inspect_replay_masks import (  # noqa: E402
     measure_region,
 )
 
-# The live default and the full-image comparison. RT-0073 asks for these two.
+# Compare the live default with the full-image stride.
 REFERENCE_STRIDE = 4
 ALTERNATE_STRIDE = 1
 REGION_PAD_PX = 2

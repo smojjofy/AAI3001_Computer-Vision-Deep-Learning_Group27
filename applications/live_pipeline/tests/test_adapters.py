@@ -100,7 +100,7 @@ def test_depth_threshold_mask_rejects_full_frame_band() -> None:
 
 
 def test_hole_fill_does_not_invert_a_corner_touching_region() -> None:
-    # RT-0018: a small band that touches the image corner made the old fill
+    # A small band that touches the image corner made the old fill
     # return the whole frame. The mask must stay at the component size, and the
     # final area guard must judge the post-fill mask.
     height, width = 40, 50

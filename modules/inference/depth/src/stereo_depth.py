@@ -1,7 +1,7 @@
 """Rectified stereo depth from one left-right pair, using OpenCV StereoSGBM.
 
 This module implements the matching stage of
-``docs/STEREO_DEPTH_EXPERIMENT_PLAN.md``. It is a pure function: it takes two
+``docs/stereo-research-record.md``. It is a pure function: it takes two
 rectified images and one calibration record, and it returns metric depth in the
 shared project convention. It does not open a camera, load a model, or read a
 file, so the matching stage is unit-testable without hardware.

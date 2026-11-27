@@ -640,8 +640,8 @@ def main() -> None:
             def record_failure() -> None:
                 counters["refresh_failed"] += 1
                 run_counters.record_failure(job_generation)
-                # Group every failure by class, not only the last message. RT-0087
-                # needs a count for each cause.
+                # Group every failure by class, not only the last message.
+                # Record a count for each cause.
                 reason = getattr(error, "reason", "other")
                 counters[f"refresh_failed_{reason}"] += 1
                 with lock:
@@ -662,7 +662,7 @@ def main() -> None:
                 with lock:
                     latest["last_error"] = str(error)
 
-            # RT-0026 item 2: a stale failure must not start person loss in the
+            # A stale failure must not start person loss in the
             # new run or overwrite the current error.
             if not run_guard.record_failure_if_current(job_generation, record_failure):
                 counters["refresh_discarded_stale"] += 1
@@ -732,7 +732,7 @@ def main() -> None:
                 flush=True,
             )
 
-        # RT-0026 item 3: validation and publication share one generation
+        # Validation and publication share one generation
         # boundary. A run change cannot occur between them.
         if not run_guard.publish_if_current(job_generation, publish):
             counters["refresh_discarded_stale"] += 1
@@ -907,7 +907,7 @@ def main() -> None:
         "capture_fps": round(handler.metrics.capture_fps, 2),
         "queue_drops": handler.queue.dropped_total,
         "last_error": latest["last_error"],
-        # RT-0087: every failure grouped by class, with a small sample of each.
+        # Group every failure by class, with a small sample of each.
         "refresh_failure_classes": {
             reason: int(count)
             for key, count in sorted(counters.items())

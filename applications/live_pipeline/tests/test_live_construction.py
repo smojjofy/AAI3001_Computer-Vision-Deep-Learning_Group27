@@ -1,6 +1,6 @@
 """Live refresh-construction test: the real pipeline wiring, not only units.
 
-RT-0064 found that the unit suite passed while the live constructor raised
+An integrated run found that the unit suite passed while the live constructor raised
 TypeError, because no test built a RefreshPipeline and ran one refresh through
 the real PoseDepthPipeline. This test closes that gap. It needs the real model
 files, so it skips when they are absent.

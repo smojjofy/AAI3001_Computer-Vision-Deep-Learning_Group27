@@ -23,3 +23,5 @@ must preserve this half-pixel convention when reprojecting constructor output.
 
 Gaussian rotations are unit quaternions stored in `wxyz` order. Scale values in
 standard 3DGS PLY files are natural logarithms; opacity values are logits.
+The [representation guide](../../docs/splat-representation-and-runtime.md)
+shows how the browser converts these values for the live viewer.

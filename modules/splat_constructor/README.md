@@ -1,14 +1,20 @@
 # Splat Constructor
 
-The first implementation is a dependency-free C++20 CPU constructor. It turns
-aligned RGB, binary foreground mask, and unitless pseudo inverse-depth images
-into a standard binary 3DGS PLY. The implementation uses the coordinate system
-documented in `shared/coordinate_system/README.md`.
+The constructor is a dependency-free C++20 CPU library. It turns aligned RGB,
+binary foreground mask, and relative or metric depth into Gaussian splat
+states. The command-line adapter can export a binary 3DGS PLY. The
+implementation uses the [coordinate system](../../shared/coordinate_system/README.md).
+The integrated application calls its Python bridge on a selected refresh.
+Each valid refresh replaces one active splat state. The constructor does
+not merge geometry across frames. The [milestone workflow](../../docs/single-camera-workflow.md)
+states that scope.
 
 The runtime boundaries are `ConstructionFrame` v1 and `SplatState` v1,
-documented under `shared/schemas/`. The current CLI is a fixture adapter: it
-still reads 8-bit PPM/PGM and exports PLY + JSON, while the future in-memory
-binding will call the implemented float32 entry point directly. That entry
+documented under [`shared/schemas/`](../../shared/schemas/). The CLI is a
+fixture adapter: it reads 8-bit PPM/PGM and exports PLY + JSON. The integrated
+application already calls the float32 entry point through the Python bridge.
+The [representation guide](../../docs/splat-representation-and-runtime.md)
+explains the constructor values and the browser conversion. That entry
 point supports relative-inverse and metric camera-Z depth, source validity and
 foreground weights, rigid camera-to-world poses, depth-gradient orientation,
 and edge-aware scale reduction.
@@ -55,8 +61,9 @@ where CMake is not installed, use the direct MinGW build script:
 
 ## Fixed first fixture
 
-Prepare the aligned `traintest_rgb.jpg` fixture from the temporary inference
-outputs, then construct the PLY:
+The RGB file is tracked. The two aligned PNGs below are allowed by
+`.gitignore`, but are not in this worktree yet. Add them before you prepare
+the constructor fixture and export the PLY:
 
 ```powershell
 python ./scripts/prepare_splat_fixture.py `
@@ -74,6 +81,6 @@ python ./scripts/prepare_splat_fixture.py `
 ```
 
 PPM/PGM keeps the native constructor independent of image-decoding libraries.
-PLY and metadata JSON are debug/export formats, not the Temporal Cache runtime
-contract. Writes use same-directory temporary files and atomic replacement so
+PLY and metadata JSON are debug/export formats. The live application uses the
+in-memory `SplatState` contract. Writes use same-directory temporary files and atomic replacement so
 an interrupted run does not leave a partially written artifact.

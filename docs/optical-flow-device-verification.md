@@ -1,5 +1,15 @@
 # Optical flow: device verification and model benchmark
 
+## Milestone result
+
+OpenCV DIS is the integrated application default. On the recorded 300-frame
+clip at a 320 x 180 maximum flow size, DIS took 83.051 ms median per pair;
+RAFT Small took 200.564 ms. Visual review favored RAFT on inspected subject
+movement, but the clip has no ground-truth flow labels. The
+[optical-flow decision](optical-flow-training.md) states the conclusion and
+its limit. The steps below reproduce the device comparison; they are not
+a claim that RAFT is the live default.
+
 Run these commands in **PowerShell from the repository root**. The commands
 use the Stream Handler's `FramePacket` output directly. DIS and RAFT Small use
 the same `FlowResult` contract, so the same recording and frame IDs can be
@@ -13,7 +23,7 @@ installs the Stream Handler, Optical Flow, and Reranker, and installs PyTorch wi
 Torchvision from a matching NVIDIA or CPU wheel, which RAFT Small needs:
 
 ```powershell
-& .\scripts\setup_device.ps1 -WithRaft
+& .\scripts\setup_system.ps1
 ```
 
 The script does not select AMD GPU acceleration. On other operating systems,

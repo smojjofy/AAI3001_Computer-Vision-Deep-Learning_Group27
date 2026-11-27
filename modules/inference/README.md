@@ -1,8 +1,19 @@
-# Temporary Inference Baselines
+# Inference package: live models and temporary baselines
 
-These compact CNNs exist to unblock the Splat Constructor while the production
-depth, pose, and mask models are developed. They are replaceable implementations
-of the shared inference contract, not target-quality models.
+The live application uses YOLO depth, MediaPipe pose, and a pose-seeded depth
+mask. These are documented in the subpackage READMEs:
+
+| Live stage | Subpackage and document |
+| --- | --- |
+| Depth | [`depth/`](depth/README.md) — YOLO26n metric depth in metres, `NaN` invalid. |
+| Pose | [`pose/`](pose/README.md) — MediaPipe Pose Landmarker Lite, 33 joints. |
+| Optical flow | `optical_flow/` — OpenCV DIS by default, optional Torchvision RAFT Small. See the [optical-flow decision](../../docs/optical-flow-training.md). |
+| Person mask | [`../../docs/person-mask.md`](../../docs/person-mask.md) — pose-seeded depth gradient with a depth-band fallback. |
+
+The compact CNNs described below were research baselines used during early
+Splat Constructor work. **They are outside the live path.** No live stage loads
+them, and no live code depends on a checkpoint from this page. They are retained
+for the research record.
 
 ## Training data
 

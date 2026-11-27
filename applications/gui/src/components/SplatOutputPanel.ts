@@ -527,7 +527,7 @@ export class SplatOutputPanel {
    */
   setMotionWarp(motion: MotionPayload | null): void {
     if (motion !== null && !this.motionMatchesActiveState(motion)) {
-      // RT-0019 item 2: motion created for a different state must never move
+      // Motion created for a different state must never move
       // the displayed splats. Keep the current display and ignore the payload.
         this.activeMotion = null
       this.bodyFactors = null

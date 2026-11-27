@@ -27,10 +27,11 @@ time between the compared frames and is **not** inferred from frame IDs.
 The reranker consumes reference-to-current flow and compares each new frame
 with its own one-entry record of the last significant camera frame. A
 significant difference replaces that record and yields `refresh`; otherwise it
-yields `reuse`. The Frame Processor executes that decision. The Temporal Cache
-is a downstream splat-format store and is not an input to the reranker. Flow
-only reports frame correspondence and validity. Newly exposed surfaces require
-fresh depth; flow cannot fill them in.
+yields `reuse`. In the integrated application, refresh estimates depth, pose,
+and a person mask before construction. Reuse moves only displayed splats in
+the browser. A persistent Temporal Cache is outside the live path. Flow
+reports frame correspondence and validity; it cannot fill newly exposed
+surfaces with depth.
 
 `OpticalFlowTracker.push(frame)` accepts the Stream Handler's RGB8
 `FramePacket` directly. A compatible processed frame could also be passed if a

@@ -232,7 +232,7 @@ def test_missing_rows_file_is_reported(tmp_path: Path) -> None:
 def test_pose_detected_false_and_null_are_counted_per_source(
     replay_dir: Path, tmp_path: Path
 ) -> None:
-    # RT-0076: the summary created these counters but never incremented them.
+    # Check that the summary increments these counters.
     # Row 2 becomes a false no-pose fallback row, row 3 has a null value, and row
     # 4 keeps true. A null value must not be counted as false.
     rows_path = replay_dir / "rows.jsonl"

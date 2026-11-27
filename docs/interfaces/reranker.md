@@ -1,32 +1,28 @@
 # Reranker: Flow Result to Selection Decision
 
-The reranker is a one-reference replacement cache, not a reconstruction-quality
-model. It receives reference-to-current `FlowResult` data for selected frames
-and owns exactly one retained camera frame: the last frame it marked
-significant, together with
-its identity and comparison metadata. It does not retain every frame and never
-reads the Temporal Cache's splat state. For each incoming frame it asks:
+The reranker is a one-reference frame selector, not a reconstruction-quality
+model. It receives reference-to-current `FlowResult` data and retains one
+significant camera frame with its identity. It does not retain every frame
+and does not read splat state. For each incoming frame it asks:
 
 ```text
 Is this frame significantly different from the retained significant frame?
 ```
 
-It then emits a `SelectionDecision` with exactly one action. The intended
-downstream routing is:
+It emits a `SelectionDecision` with exactly one action. The integrated
+application uses these actions:
 
-- `reuse`: the Frame Processor sends the original `FramePacket` and its
-  matching `FlowResult` to the Temporal Cache. No depth, foreground, or motion
-  estimator runs for that decision.
-- `refresh`: the Frame Processor creates a `ProcessedFrame` from the selected
-  original packet, then requests depth, foreground segmentation, and optional
-  human motion/pose. Those results, plus matching flow identity, feed the Splat
-  Constructor.
+- `reuse`: keep the active splat state and send matching flow for a browser
+  display warp. Depth, pose, mask selection, and construction do not run.
+- `refresh`: use the selected original frame for depth, MediaPipe pose,
+  person-mask selection, and native splat construction. Publish the new
+  state only when construction is valid.
 
-On the first frame, or when the difference is significant, the reranker flushes
-the retained reference, copies the current frame into its one-entry cache, and
-emits `refresh`. An insignificant difference emits `reuse` and leaves the
-retained reference unchanged. If flow is unavailable, the conservative initial
-policy is `refresh`.
+The standalone reranker module replaces its retained frame when it emits
+`refresh`. The integrated application advances the retained refresh
+reference only after a valid construction. A failed refresh keeps the last
+valid state and reference. Insignificant difference emits `reuse`.
+Unavailable flow requests a refresh.
 
 The reference also expires after `max_reference_age_ns` of capture time
 (default 500 ms). This keeps the same time limit across 30, 60, and variable-FPS
@@ -50,5 +46,5 @@ not merely adjacent-frame motion.
 The current implementation makes deterministic threshold decisions and records
 the measured difference score when flow is valid. A learned ranking model is
 not part of the implemented path. The threshold and scheduling decisions are
-recorded in [the integration history](../Integration.md) and the live diagnostic
-results in [the integration guide](../integration_runbook.md).
+recorded in [the integration evidence](../integration-evidence.md) and the live diagnostic
+results in [the technical record](../integration-technical-history.md).

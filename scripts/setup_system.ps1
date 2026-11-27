@@ -503,11 +503,28 @@ if (-not (
     Test-Path `
         -LiteralPath $poseModel
 )) {
-    throw @"
-MediaPipe Pose model is missing:
-
-$poseModel
-"@
+    $poseModelUrl =
+        "https://huggingface.co/litert-community/MediaPipe-PoseLandmarker-Lite/resolve/main/pose_landmarker_lite.task"
+    $poseDirectory = Split-Path -Parent $poseModel
+    New-Item -ItemType Directory -Force -Path $poseDirectory | Out-Null
+    $partialModel = "$poseModel.download"
+    Write-Host "Downloading MediaPipe Pose Landmarker Lite..."
+    try {
+        Invoke-WebRequest `
+            -Uri $poseModelUrl `
+            -OutFile $partialModel `
+            -UseBasicParsing
+        if ((Get-Item -LiteralPath $partialModel).Length -lt 1000000) {
+            throw "Downloaded Pose model is too small. Check the model source."
+        }
+        Move-Item -LiteralPath $partialModel -Destination $poseModel
+    }
+    catch {
+        throw "Could not download the MediaPipe Pose model from $poseModelUrl. Place it at $poseModel and run setup again. $($_.Exception.Message)"
+    }
+    finally {
+        Remove-Item -LiteralPath $partialModel -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host "Pose model OK."
@@ -654,13 +671,17 @@ else {
     # The suite must run under the virtual-environment interpreter. A bare
     # "python" on this machine can resolve to the system Python, which has no
     # mediapipe and fails the live construction tests.
+    # A fresh base directory avoids a prior run's locked files on Windows.
+    $pytestBaseTemp = Join-Path $repoRoot (
+        ".tmp\pytest-setup-" + [guid]::NewGuid().ToString("N")
+    )
     & $python `
         -m `
         pytest `
         -q `
         -p `
         no:cacheprovider `
-        --basetemp=.tmp\pytest-setup
+        "--basetemp=$pytestBaseTemp"
 
     if ($LASTEXITCODE -ne 0) {
         throw @"

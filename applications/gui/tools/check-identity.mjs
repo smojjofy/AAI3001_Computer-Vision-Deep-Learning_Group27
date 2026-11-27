@@ -2,7 +2,7 @@
  * Focused checks for the pure identity helpers used by the viewer.
  *
  * These helpers decide whether a fetched state belongs to the state the viewer
- * asked for (RT-0028 items 1 and 4, RT-0030 item 2). They are pure, so they are
+ * asked for. They are pure, so they are
  * checked here without a browser.
  *
  * Run from applications/gui:
@@ -75,7 +75,7 @@ const freshSettled = settleMaskIdentity(splatKey('camera', 2, 43), splatKey('cam
 check('a fresh response displays its own identity', freshSettled.displayedKey === freshSettled.satisfiedKey)
 check('a missing response identity falls back to the request', settleMaskIdentity(active, null).displayedKey === active)
 
-// Delayed responses across a run clear (RT-0034). The epoch is 0 while a
+// Delayed responses across a run clear. The epoch is 0 while a
 // request is in flight; the boundary clear must invalidate it even when no
 // displayed or pending key exists.
 {
@@ -105,7 +105,7 @@ check('an active state applies motion and depth', shouldApplyAuxiliary(true) ===
 check('an idle clear does nothing', shouldClearDisplayedState(false, 0) === false)
 check('displayed state always clears', shouldClearDisplayedState(true, 0) === true)
 
-// A request queued behind an old in-flight response still drains (RT-0036).
+// A request queued behind an old in-flight response still drains.
 {
   const oldEpoch = 11
   const newEpoch = 12
@@ -119,7 +119,7 @@ check('displayed state always clears', shouldClearDisplayedState(true, 0) === tr
   check('the old response is from the old run', shouldApplyResponse(oldEpoch, newEpoch) === false)
 }
 
-// Motion and pose-depth must match the active diagnostics identity (RT-0036).
+// Motion and pose-depth must match the active diagnostics identity.
 {
   const activeState = { source_id: 'camera', generation: 2, frame_id: 77 }
   check('same-run motion applies', auxMatchesActive({ source_id: 'camera', generation: 2, splat_frame_id: 77 }, activeState) === true)

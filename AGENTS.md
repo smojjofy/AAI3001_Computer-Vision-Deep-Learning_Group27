@@ -7,15 +7,15 @@ reconstruction pipeline. Stack is Python (3.11–3.13) + PyTorch for inference a
 C++20 for the Splat Constructor on Windows.
 
 ```text
-stream handler → optical flow → reranker → Frame Processor decision/dispatch
-→ reuse through Temporal Cache or refresh through depth + motion + Splat Constructor
-→ Splat Adjustor → Three.js viewer
+stream handler → optical flow → reranker → refresh through depth, pose, mask,
+and Splat Constructor → active splat state → gsplat browser viewer
 ```
 
-The initial visual signals are RGB, foreground segmentation, relative depth, and
-optical flow. The Stream Handler, Optical Flow, Reranker, GUI shell, live
-scheduler, YOLO depth / MediaPipe pose pipeline, and the native Splat Constructor
-are implemented. Integration into one running pipeline is in progress.
+The current application is integrated. On reuse, the browser applies an
+optical-flow view-space warp to the active state. It does not fuse persistent
+splat geometry across refreshes. The optional environment compositor uses
+Three.js. See `docs/integration_runbook.md` for current operation and
+`docs/splat-representation-and-runtime.md` for the data path.
 
 ## Repository Structure
 
@@ -24,14 +24,10 @@ are implemented. Integration into one running pipeline is in progress.
 - `shared/` contains packet schemas, serialization helpers, and coordinate conventions.
 - `modules/` contains independently developable pipeline stages:
   - `stream_handler/` receives and timestamps webcam/ZED/IP-camera frames.
-  - `frame_processor/` executes reranker-directed reuse or refresh and preprocesses refresh frames.
-  - `inference/` provides optical flow, depth, pose, and segmentation.
+  - `inference/` provides optical flow, depth, pose, and experimental segmentation.
   - `reranker/` compares each incoming frame with one retained significant frame and chooses reuse or refresh.
   - `splat_constructor/` converts inference output into Gaussian states (C++20 core, ctypes bridge, CLI, PLY export).
   - `reconstruction_validation/` projects constructor output back into the source view for metrics.
-  - `temporal_cache/` stores, interpolates, and updates timestamped splat states downstream of reranking.
-  - `splat_adjustor/` will merge reused cache state and new splat candidates.
-  - `three_viewer/` renders reconstruction output in Three.js.
 - `applications/` contains backend orchestration and GUI composition.
 - `scripts/` contains repeatable development and validation utilities.
 - Interface documentation and schemas describe each module's inputs and outputs.
@@ -87,13 +83,13 @@ python ./scripts/prepare_splat_fixture.py --rgb <rgb> --depth <depth.png> `
 - `modules/inference/depth/` — `YoloDepthEstimator` (Ultralytics YOLO26 depth, metric depth in metres, `NaN` for invalid), `PoseDepthPipeline` (pose + depth fusion), and the temporary `TinyDepthNet` baseline.
 - `modules/inference/pose/` — MediaPipe pose (`PoseEstimator`, `VideoPoseEstimator`, `PoseFrameResult`).
 - `modules/inference/optical_flow/` — OpenCV DIS (default, offline) and optional Torchvision RAFT Small.
-- `modules/inference/segmentation/` — `TinySegmentationNet` temporary baseline; a production person-mask model is still required.
+- `modules/inference/segmentation/` — `TinySegmentationNet` research baseline. The live person mask uses pose and depth. A trained mask candidate remains outside the live path.
 - `modules/splat_constructor/` — dependency-free C++20 CPU library + CLI + NumPy/ctypes bridge. `ConstructionFrame` v1 → `SplatState` v1 are the frozen in-memory contracts.
 - `shared/coordinate_system/README.md` — authoritative constructor convention: right-handed, Three.js-compatible (`+X` right, `+Y` up, camera forward `-Z`); `wxyz` quaternions; log scale; logit opacity.
 - `shared/schemas/` — source of truth for module boundaries.
-- `applications/gui/` — Vite + TypeScript + Three.js viewer shell.
-- `applications/backend/` — preview/HTTP server.
-- `applications/live_pipeline/` — live capture → flow → rerank scheduler.
+- `applications/gui/` — Vite + TypeScript + `gsplat` viewer and optional Three.js environment.
+- `applications/backend/` — snapshot and HTTP server.
+- `applications/live_pipeline/` — integrated capture, selection, refresh, and reuse.
 
 ## Conventions
 
@@ -125,6 +121,8 @@ evidence in pull requests when applicable.
 ## Notes
 
 - Multi-camera, camera tracking, and Unreal integration are deferred future scope.
-- Splat Constructor output is a mask-shaped "relief" until the handoff provides a real depth source with consistent scale.
-- ZED SDK depth is an unconfirmed, benchmark-gated option. Predicted relative and YOLO metric depth remain the baseline paths.
+- Splat Constructor output uses metric depth in the integrated application.
+  The single camera still limits unseen geometry and orbit views.
+- ZED SDK depth is available through the ZED source. The experimental stereo
+  matcher has open quality checks. The webcam uses YOLO metric depth.
 - `pytest` may crash at startup on this machine because of a broken `pyreadline` in user site-packages; set `PYTHONNOUSERSITE=1` first.

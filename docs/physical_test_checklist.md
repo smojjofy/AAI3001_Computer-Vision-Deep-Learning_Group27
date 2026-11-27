@@ -1,5 +1,15 @@
 # Physical test checklist (person present)
 
+## Milestone evidence
+
+P1 to P5 ran with a real person on 2026-11-19. Those results covered the
+depth-band mask used in that rehearsal. The live mask later changed to the
+pose-gradient method. Do not treat the earlier pass as a physical test of
+the newer mask. The [enhancement evidence](enhancement-evidence.md) keeps
+the measured rehearsal result, and the
+[milestone reflection](Integration-Enhancements.md) states the accepted
+quality claim. The steps below remain the repeatable physical test protocol.
+
 Run these checks when a person is in front of the camera. They are needed for
 the real-person evidence gate. Automated checks and recorded-video runs do not
 replace them.
@@ -23,7 +33,8 @@ Run every command from the repository root unless a step says otherwise.
 
 ## Test P1 - camera sanity, empty scene
 
-Purpose: prove the mask guard rejects a whole-frame depth mask.
+Purpose: check that an empty scene publishes no person state. A missing pose
+can reject the refresh before the mask-area guard runs.
 
 1. Point the camera at the room with no person.
 2. Run:
@@ -150,7 +161,7 @@ Record: `.tmp\p5_depth.png` and the page text printed by the capture tool.
 
 ## Evidence to return
 
-Copy these files into `docs/evidence/` or attach them in the roundtable message:
+Copy these files into `docs/evidence/` and list their paths in the test report:
 
 - `p1_empty.json`
 - `p2_still.json` and `p2_still.log`

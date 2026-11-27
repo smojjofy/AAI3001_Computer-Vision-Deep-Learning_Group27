@@ -1,7 +1,9 @@
 # Pose Estimator: MediaPipe Pose Landmarker
 
 This module estimates 33 body landmarks from one RGB frame. It is the input to the
-person mask and to the depth-fused joint positions that the Splat Constructor uses.
+person mask and to the depth-based validity gate before splat construction.
+The milestone uses MediaPipe Lite. The measured comparison below explains why
+it was selected and what the eleven scenarios do not establish.
 
 ## Model choice
 
@@ -89,7 +91,7 @@ than committed to the repository:
 | lite_lower_body_cutoff.jpg | [Google Drive](https://drive.google.com/file/d/1EB06YeVeGSLLKqO8swNCyt7x-Ar0kNyZ/view) |
 
 If a link is unavailable, any of these scenarios can be regenerated with
-`scripts/compare_models.py`, which writes the same overlay pair for every image in
+`modules/inference/pose/scripts/compare_models.py`, which writes the same overlay pair for every image in
 `test_images/`.
 
 ## Reproducing the comparison
@@ -110,5 +112,6 @@ downstream stages:
 - the pose-seeded depth-gradient mask, which uses joints as watershed markers
 - the splat validity gate, which limits construction to the joint depth range
 
-See `docs/Integration.md` for the identity contract and
-`docs/Integration-Enhancements.md` for the mask work that consumes these joints.
+See the [integration architecture](../../../docs/integration.md) for the identity
+contract and the [enhancement record](../../../docs/Integration-Enhancements.md)
+for the mask work that consumes these joints.

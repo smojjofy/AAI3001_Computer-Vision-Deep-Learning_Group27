@@ -1,149 +1,72 @@
-# Single-Camera Visual Reconstruction Workflow
+# Milestone workflow: one camera to a live splat view
 
-This document describes the intended MVP and its extension path. The base system uses one static camera and learned visual signals. Skeletal animation, online optimization, and richer metadata are optional extensions rather than prerequisites for the first working demo.
+The milestone application makes a depth-guided Gaussian splat view from one
+static camera on one computer. The camera can be a webcam, OBS Virtual Camera,
+or ZED 2i. The webcam is the default. A browser shows the source frame,
+inference previews, diagnostics, and the newest valid splat state. The
+[runbook](integration_runbook.md) gives the launch commands. The
+[integration architecture](integration.md) defines the component boundaries.
 
-## Base streaming pipeline
+## Delivered data flow
 
 ```mermaid
 flowchart TD
-    CAM[Static webcam or IP camera]
-    STREAM[Stream Handler<br/>decode, timestamp, reconnect]
-    PACKET[RGB8 FramePacket<br/>identity, timestamp, quality]
-    FLOW[Optical flow<br/>retained reference to current FramePacket]
-    SELECT[Reranker<br/>one retained significant frame]
-    DISPATCH[Frame Processor<br/>execute reuse or refresh]
-    PRE[Frame Processor<br/>prepare selected refresh frame]
-    SEG[Foreground segmentation<br/>mask + confidence]
-    DEPTH[Monocular depth<br/>relative depth + confidence]
-    MOTION[Optional human motion or pose]
-    FRAME[ConstructionFrame<br/>RGB + mask + depth + flow<br/>optional camera/pose/rig metadata]
-
-    REUSE[Reuse observation<br/>frame + reliable flow]
-    INIT[Depth-guided splat initializer<br/>keyframes only]
-    FUSE[Merge, deduplicate, and prune]
-    BIND[Optional skeletal binding<br/>when pose/rig data is available]
-    ADJUST[Splat Adjustor<br/>merge reused state or splat candidate]
-    CACHE[Temporal Gaussian cache<br/>persistent states and confidence]
-    RENDER[Streaming rasterizer<br/>fast render path]
-    OUTPUT[RGBA + relative depth<br/>coverage + uncertainty]
-
-    REPLAY[Replay buffer<br/>old keyframes]
-    OPT[Optional background optimizer<br/>sliding-window refinement]
-
-    ENV[Static Three.js environment<br/>background, floor, or 3D scene]
-    VIEW[Three.js static compositor<br/>Gaussian renderer, alpha compositing,<br/>GUI and diagnostics]
-    FINAL[Final Three.js view]
-
-    CAM --> STREAM --> PACKET --> FLOW --> SELECT
-    SELECT -. retained significant frame .-> FLOW
-    SELECT --> DISPATCH
-    DISPATCH -->|refresh| PRE
-    PRE --> SEG
-    PRE --> DEPTH
-    PRE --> MOTION
-    PRE --> FRAME
-    SEG --> FRAME
-    DEPTH --> FRAME
-    MOTION --> FRAME
-    FLOW --> FRAME
-
-    DISPATCH -->|reuse| REUSE
-    FRAME --> INIT --> FUSE
-    FUSE --> BIND --> ADJUST
-    REUSE --> ADJUST
-    CACHE --> ADJUST
-    ADJUST --> CACHE
-    CACHE --> RENDER --> OUTPUT --> VIEW
-
-    CACHE --> REPLAY --> OPT --> CACHE
-    ENV --> VIEW --> FINAL
-
-    classDef input fill:#dbeafe,stroke:#2563eb,color:#111827;
-    classDef inference fill:#dcfce7,stroke:#16a34a,color:#111827;
-    classDef construct fill:#fef3c7,stroke:#d97706,color:#111827;
-    classDef render fill:#f3e8ff,stroke:#9333ea,color:#111827;
-    classDef optional fill:#f3f4f6,stroke:#6b7280,color:#111827;
-
-    class CAM,STREAM,PACKET,PRE input;
-    class SEG,DEPTH,MOTION,FLOW,FRAME inference;
-    class SELECT,DISPATCH,REUSE,INIT,FUSE,BIND,ADJUST,CACHE construct;
-    class RENDER,OUTPUT,ENV,VIEW,FINAL render;
-    class REPLAY,OPT optional;
+    CAM[Static camera] --> STREAM[Stream Handler: RGB, time, identity]
+    STREAM --> FLOW[OpenCV DIS optical flow]
+    FLOW --> RANK[Reranker: 100 ms candidate window]
+    RANK -->|refresh| INFER[Selected-frame depth and MediaPipe pose]
+    RANK -->|reuse| WARP[Browser display warp]
+    INFER --> MASK[Pose-gradient person mask]
+    MASK --> CONSTRUCT[CPU Splat Constructor]
+    CONSTRUCT --> STATE[One active splat state]
+    STATE --> SERVER[Snapshot and HTTP server]
+    SERVER --> VIEW[gsplat browser view]
+    WARP --> VIEW
+    SERVER --> ENV[Optional Three.js environment view]
 ```
 
-## MVP scope
+Optical flow compares each candidate with the retained significant frame.
+The reranker uses flow magnitude to choose a refresh frame. Background motion
+can win a window. Depth, pose, and mask selection run on the selected refresh
+only. A timed refresh can request a new state when motion is low. The
+retained reference advances after a valid construction. A failed refresh
+leaves the last valid state available.
 
-The first implementation should include:
+Webcam and OBS refreshes use YOLO depth. A ZED refresh can use SDK depth. An
+experimental ZED option uses the synchronized left and right images for
+StereoSGBM depth on the selected frame. The right image contributes depth,
+not another splat color view. The [stereo result](STEREO_DEPTH_EXPERIMENT_PLAN.md)
+states its validation limit.
 
-- One static webcam or IP camera.
-- Live input with a bounded ring buffer and timestamp ordering.
-- Frame preprocessing and quality checks.
-- Foreground segmentation.
-- Monocular relative-depth estimation.
-- Optical flow for temporal correspondence.
-- Reranking against one retained significant frame with capture-time reference expiry.
-- A Frame Processor decision/dispatch step: reuse a valid cache state or prepare a refresh frame.
-- Depth-guided Gaussian initialization for keyframes.
-- Merge, deduplication, confidence tracking, and pruning.
-- Temporal reuse for non-keyframes.
-- Splat adjustment that merges a reused cache state or a new depth-guided splat candidate.
-- RGBA, relative depth, coverage, and uncertainty output.
-- Three.js rendering over a static environment or background.
+## Mask, state, and display
 
-The initial viewer should remain close to the capture camera. Small virtual-camera movements are acceptable; large viewpoint changes and hidden-surface reconstruction are outside the reliable single-camera scope.
+The current mask uses visible pose joints to select the subject in the depth
+plane. A depth-threshold band is the fallback. Joint-depth validity also
+prevents distant background pixels inside the face or body silhouette from
+making splats. The [milestone reflection](Integration-Enhancements.md)
+states the observed improvement and its limits.
 
-## Optional extension layers
+The native constructor projects selected pixels into the camera view and
+stores position, color coefficients, opacity, scale, rotation, weight, and
+source pixel. The server publishes the state, mask, and pose-depth preview
+as one snapshot. The browser accepts responses only when their run and
+frame identity match the active state. The
+[representation guide](splat-representation-and-runtime.md) gives the
+array formats and browser conversion.
 
-The same `ConstructionFrame` can carry additional data when available:
+Each successful refresh replaces the active state. A reuse decision moves
+only the displayed positions with source-view optical flow. It does not
+change stored splat positions or fuse geometry across frames. The main
+viewer uses `gsplat`. The optional Three.js environment compositor imports
+one `.glb` scene and displays the same published splat frames. The
+[GUI guide](../applications/gui/README.md) describes its controls.
 
-```text
-ConstructionFrame {
-    rgba_or_rgb
-    foreground_mask
-    mask_confidence
-    relative_depth
-    depth_confidence
-    optical_flow
-    flow_valid_mask
-    optional_camera_intrinsics
-    optional_camera_extrinsics
-    optional_skeletal_pose
-    optional_bone_hierarchy
-    optional_skinning_weights
-}
-```
+## What this workflow establishes
 
-When skeletal data is present, the Splat Constructor can add per-Gaussian binding and pose-aware deformation. This enables an animatable asset without changing the base RGB, mask, depth, and flow pipeline.
-
-The replay buffer and background optimizer are quality extensions. They should refine persistent Gaussian state asynchronously and must not block the fast rendering path.
-
-## Module ownership
-
-Each pipeline stage was built and owned by one team member. The table in the
-[main README](../README.md#team-and-component-ownership) maps the five work
-packages to the diagram above.
-
-Two deviations from the original split are worth naming, because the diagram
-still shows stages that integration replaced:
-
-- **Foreground segmentation** was planned as a trained model. It was never built
-  as one. The live person mask is a pose-seeded depth-gradient watershed, which
-  needs no segmentation network. See
-  [the enhancement record](Integration-Enhancements.md).
-- **The Temporal Cache and its Three.js viewer** were generalised into the
-  single display clock and the `gsplat` renderer described in
-  [the integration history](Integration.md).
-
-## Future multi-camera extension
-
-The `ConstructionFrame` can later be extended to a synchronized set of camera observations:
-
-```text
-Camera array
-    → frame synchronization and calibration
-    → per-camera RGB, segmentation, depth, and flow
-    → multi-view correspondence and pose estimation
-    → multi-angle Gaussian construction
-```
-
-The temporal cache, Gaussian state format, rasterizer outputs, and Three.js compositor should remain reusable for this extension.
+The application demonstrates a live, view-conditioned splat visualization.
+It does not reconstruct surfaces that the single camera cannot see. Orbit
+views can show stretched or missing geometry. The trained mask candidate
+and stereo matcher are measured experiments; neither changes the webcam
+default. The persistent Temporal Cache, Splat Adjustor, and multi-camera
+design in the [original design record](single-camera-design-record.md)
+are outside this milestone workflow.
